@@ -58,13 +58,20 @@ Claude 读文章 → 自己选 3-5 处 → 直接写新文件 `article-image.md`
   "engine": "gemini",                      // 新增:gemini|excalidraw|mermaid(作者 --engine 枚举)
   "type": "metaphor",                      // 新增(可选):作者语义类型 process/sequence/concept/comparison/metaphor…
   "placeholder": "<!-- IMAGE:001 -->",     // 新增:回填精确匹配行(统一格式,纯编号)
+  "line": 42,                              // 新增:占位符在 {stem}-image.md 中的行号(从 1 起)
+  "anchor": "## 二、IoC 原理",              // 新增:占位符所属最近 markdown 标题(无则 null)
   "filename": "images/{stem}-img-001.png", // 新增:PNG 产物路径(gemini/excalidraw 用;mermaid 嵌码则可空)
   "code": "",                              // 新增:mermaid/excalidraw 源码(Stage 3 填,可编辑重渲染)
   "status": "planned"                      // 新增:planned→generated→inserted(可续跑)
 }
 ```
 
-**锚点字段去除**:占位符注释即唯一精确行级锚点;`content` 仅供人工校验,不作第二定位。
+**位置字段硬化(line + anchor)**:`line` 与 `anchor` 是 `placeholder` 的两个**机器可读**伴随字段,
+**Stage 1 slash command 必须在插入占位符的同一动作里记录两者**(不靠事后扫描)。这样下游任何
+阶段都能从 JSON 直接读到精确插入位置,不必数换行符。`anchor` 取最近 markdown 标题(`#`/`##`/`###`…);
+占位符若在该标题之前(章首),记前一个标题;若全文无标题,记 `null`。
+
+**锚点字段去除**:`content` 仅供人工校验,不作第二定位;真正行级锚点是 `placeholder` 文本 + `line` 整数。
 **引擎枚举**:严格取作者 `--engine` 值 `gemini` / `excalidraw` / `mermaid`,不自定义。
 **`type` 语义类型(可选)**:沿用作者 README 的类型表(`process`/`architecture`/`sequence`/
 `mindmap`/`state`/`concept`/`comparison`/`data`/`scene`/`metaphor`/`cover`),帮 Stage 3
@@ -100,6 +107,12 @@ Stage 1 由大模型**同时**判定位置(→占位符行)、引擎(→`engine`
 - `-g -full`:已生成的 gemini 图按 `placeholder` 回填副本 → `inserted`(覆盖需确认)。
 - `<name.png>`:单图重生(读该项 content 重发 API,覆盖同名图,需确认)。
 - `<name.png> -y`:单图回填副本原位。
+- `--prompt-only`:不调 API,**只产出** `{stem}.image-prompts.json`,覆盖**全量** picture
+  (不只 gemini;mermaid/excalidraw 的 `prompt` 字段填该图将生成的 `code` 草案占位)。
+  用于:debug prompt / 不想花 API 钱预览 / 给 LLM 自己 review 文本质量。
+  每个 picture 字段:`id / topic / content / engine / type / line / anchor / placeholder / filename / prompt / status="prompted"`。
+  `prompt` 对 gemini 项为 `style+"\n\n"+topic+"\n\n"+content` 拼接;对 mermaid/excalidraw
+  项为 `content`(Stage 3 据此生 code)。
 - **后端可插拔**:`--backend gemini|minimax`,默认 minimax;PR 上游时切 gemini。
 
 ## Stage 3 `/si-chart` 骨架(结构图,作者引擎)
