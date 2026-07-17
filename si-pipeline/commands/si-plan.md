@@ -24,7 +24,7 @@ allowed-tools: Read Write Edit Bash Glob
 5. **优先级**:`Gemini > Excalidraw > Mermaid`(作者硬规则)
 6. **数量**:短文(< 1000 字)1-2,中篇(1000-3000)2-4,长文(> 3000)4-6,教程每主步骤 1 张
 7. **清单**:`{stem}.illus.json` 紧挨原文
-8. **Style 字段**:从 `{skill_root}/styles/style-{name}.md` **完整拷贝**(`style-light.md` 默认),不简化
+8. **Style 字段**:从 `{skill_root}/styles/style-{name}.md` 抽取 ``` 代码块内的**操作型 Gemini System Prompt**(默认 `style-light.md`)。丢弃前后 markdown 元数据(标题、`## Gemini System Prompt` 标题、闭合 ```、末尾的 `## Prompt 模板`/`## 配图类型` 文档段)——这些是给人读的,不该塞给 Gemini。
 9. **Code 字段**:Stage 1 一律 `""`(Stage 3 才填)
 10. **Status**:Stage 1 全部为 `planned`
 11. **filename 字段**:`gemini`/`excalidraw` → `images/{stem}-img-NNN.png`;`mermaid` 嵌码 → `""`
@@ -73,11 +73,16 @@ allowed-tools: Read Write Edit Bash Glob
 
 **幂等**:对每处 `Edit` 前先 `Read` 副本对应行;若 `<!-- IMAGE:NNN -->` 已存在,跳过并复用其编号。
 
-### 5. 读 style(必须用作者原文,不简化)
+### 5. 读 style(提取操作型 Gemini System Prompt)
 
 - 默认路径:`{skill_root}/styles/style-light.md`(`skill_root` = 本 slash command 解析到的仓库根,即 `~/.claude/skills/smart-illustrator`)
 - 若用户传 `--style <name>`,改读 `style-{name}.md`
-- `Read` 该文件全文,**完整内容**塞到 JSON 的 `style` 字段
+- `Read` 该文件全文
+- **抽取**文件中 ``` … ``` 代码块**内部**的 Gemini System Prompt(整段操作型提示词),丢弃:
+  - 头部 markdown 元数据(标题 `# Style: Light...`、描述行、`## 适用场景` 列表、`## Gemini System Prompt` 标题、起始 ```)
+  - 尾部 markdown 文档段(闭合 ```、`## 水印`、`## Prompt 模板`、`## 配图类型 × 构图建议` 表格)
+- 将**操作型 prompt 纯文本**塞到 JSON 的 `style` 字段。这些是给 Gemini 看的;markdown 包装是给读者看的。
+- 例:`style-light.md` → 提取从"你是一位信息图绘图大师..."开始,到第一个闭合 ``` 之前结束的整段。
 
 ### 6. 生成 `{stem}.illus.json`
 
@@ -93,7 +98,7 @@ allowed-tools: Read Write Edit Bash Glob
     "do_not_merge": true
   },
   "fallback": "如果无法一次生成全部图片:请输出 N 条独立的单图绘图指令(编号 1-N),每条可单独执行,必须包含完整 style 和水印要求。",
-  "style": "<完整 style 文件内容,从 styles/style-light.md 拷贝>",
+  "style": "<操作型 Gemini System Prompt,从 styles/style-light.md 的 ``` 代码块内提取>",
   "pictures": [
     {
       "id": 1,
