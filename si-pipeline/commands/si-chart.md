@@ -1,6 +1,6 @@
 ---
 description: smart-illustrator Stage 3 — 从 {stem}.illus.json 出发,为 mermaid/excalidraw 项生成 code 并渲染 PNG,回填副本占位符;支持 --regen + -content
-argument-hint: <manifest.illus.json> [-full] [--regen <picture_id> -content "..."] [-mermaid | -excalidraw] [--theme light|dark]
+argument-hint: <manifest.illus.json> [-full] [--regen <picture_id> | -content "..." | --regen <picture_id> -content "..."] [-mermaid | -excalidraw] [--theme light|dark]
 allowed-tools: Read Write Edit Bash Glob
 ---
 
@@ -10,19 +10,21 @@ allowed-tools: Read Write Edit Bash Glob
 
 ## 输入
 
-`$ARGUMENTS` = `<manifest.illus.json> [-full] [--regen <picture_id> -content "..."] [-mermaid | -excalidraw] [--theme light|dark]`
+`$ARGUMENTS` = `<manifest.illus.json> [-full] [--regen <picture_id> | -content "..." | --regen <picture_id> -content "..."] [-mermaid | -excalidraw] [--theme light|dark]`
 
 - 第 1 段(必填):manifest 绝对或相对路径
 - `-full`:渲染后回填副本(必须在所有目标 picture 都生完图后用)
-- `--regen <picture_id>`:重生指定 picture 的 code;必须配 `-content`
-- `-content "..."`:自然语言描述,用于重生 code 时作为补充上下文
+- **目标 picture 指定方式(三选一)**:
+  - `--regen <picture_id>`:**显式指定**;用 picture 的 `id`(数字,1 起)定位。必须配 `-content`(否则报错"需要 -content")
+  - `-content "..."`(无 `--regen`):**LLM 自动匹配**;Claude 读 manifest 所有 picture 的 `topic`/`content`/`anchor`,自己挑出 1 个最匹配的;若 0 匹配报错,> 1 匹配歧义则取分数最高的 + 列出候选让用户确认
+  - `--regen <picture_id> -content "..."`:**显式 + 补充上下文**;id 锁定,`-content` 作为重生时补充上下文(直接覆写 `content` 字段)
 - `-mermaid`:只处理 mermaid 项(默认:全 mermaid + excalidraw)
 - `-excalidraw`:只处理 excalidraw 项
 - `--theme light|dark`:mermaid 主题,默认 `light`(对齐浅色文章配图)
 
 ## 全局约束(钉死,违反即错)
 
-1. **输入校验**:manifest 路径必须存在;manifest 中所有目标 picture 的 `status` ∈ `{"planned", "generated"}`(已 `inserted` / `error` 跳过)
+1. **输入校验**:manifest 路径必须存在;manifest 中所有目标 picture 的 `status` ∈ `{"planned", "generated"}`(已 `inserted` / `error` 跳过)。**单图模式(`--regen <id>` / `-content` 智能匹配)**只校验命中的那 1 张 picture,不校验全量状态。
 2. **目标 picture**:`engine == "mermaid" || engine == "excalidraw"`(gemini 项跳过,留给 Stage 2 /si-image)
 3. **Code 生成(规则)**:
    - mermaid 项:`code` 写进 `manifest.pictures[i].code`(mermaid 语法文本)
@@ -49,10 +51,13 @@ allowed-tools: Read Write Edit Bash Glob
 
 ### 1. 参数解析
 
-- 切 `$ARGUMENTS`,得 `manifest_path` / flag 集合(`full` / `regen` / `content` / `engine_filter` / `theme`)
+- 切 `$ARGUMENTS`,得 `manifest_path` / flag 集合(`full` / `regen` / `content` / `engine_filter` / `theme` / `target_id` 或 `auto_target`)
 - `~` 展开
 - 校验 `manifest_path` 必须以 `.illus.json` 结尾
-- 校验 `--regen` 必须配 `-content`(否则报错"需要 -content")
+- **目标选择**:
+  - `--regen <id>` 已设 → `target_id = <id>`(要求 `--regen` 必须配 `-content`;`-content` 作为补充上下文覆写到 `content` 字段后重生)
+  - 只有 `-content "..."` → `auto_target = true`;`target_id = None`(Step 3 由 LLM 匹配)
+  - 既无 `--regen` 也无 `-content` → 走默认(全量 planned/generated)
 - `-mermaid` / `-excalidraw` 互斥(同时传 → 报错)
 - `theme` 默认 `light`
 
@@ -70,6 +75,12 @@ allowed-tools: Read Write Edit Bash Glob
 - `-mermaid`:再 filter `engine == "mermaid"`
 - `-excalidraw`:再 filter `engine == "excalidraw"`
 - `--regen <id>`:只看该 id,且其 engine ∈ {mermaid, excalidraw}
+- **`auto_target == true`(只有 `-content` 无 `--regen`)**:Claude 读 manifest,对照 `-content` 自然语言描述,对每个 candidate picture 打匹配分:
+  - 关键词命中:`topic`/`anchor`/`content` 任一字段含 `-content` 里的关键词 → +分
+  - 章节锚点命中:`-content` 提到「第 N 节 / 第 X 章 / 某标题」 → `anchor` 含该标题的 → +分
+  - 类型命中:`-content` 提到「流程图 / 时序图 / 对比图」 → `type` 对应的 → +分
+  - **阈值**:最高分 picture 唯一 → 直接用;最高分有并列 ≥ 2 → 列出前 3 候选 + 各自的命中证据,要求用户**手动 `--regen <id>` 消歧**;全 0 分 → 报错"-content 描述与 manifest 不匹配"
+  - 锁定后 `target_id = <match_id>`,正常走 `--regen <id>` 流程
 
 记 `targets = [...]`,N = len。
 
@@ -77,9 +88,10 @@ allowed-tools: Read Write Edit Bash Glob
 
 依据 flag:
 - **路径 D(无 flag,只 plan)**:跳到 Step D
-- **路径 R(`--regen` without `-full`)**:跳到 Step R
+- **路径 R(`--regen <id>` without `-full`,或 `-content` 独立 / `-content` 配 `--regen`)**:跳到 Step R
 - **路径 F(`-full`)**:跳到 Step F
 - **路径 RF(`--regen <id> -full`)**:跳到 Step R 后接 Step F(只对指定 id 回填)
+- **路径 AF(`-content "..." -full`,auto target + 回填)**:跳到 Step R(LLM 选 id)后接 Step F(只对选中 id 回填)
 
 ### Step R: --regen(重生 code + 渲染,不动副本)
 
@@ -156,10 +168,12 @@ D.2 提示:
 N=<N>  mermaid=<m>  excalidraw=<e>  code 就绪=<c>/<N>
 
 下一步:
-- /si-chart <manifest> --regen <id> -content "..."   重生某图 code + 渲染
-- /si-chart <manifest> -full                         全部回填副本
-- /si-chart <manifest> --regen <id> -content "..." -full   重生 + 回填
-- /si-all <manifest>                                 Stage 2 + 3 一键
+- /si-chart <manifest> -content "..."                       智能匹配 id 重生(自然语言定位,无需记 id)
+- /si-chart <manifest> --regen <id> -content "..."         显式 id 重生(更精确)
+- /si-chart <manifest> -full                                全部回填副本
+- /si-chart <manifest> --regen <id> -content "..." -full    重生 + 回填
+- /si-chart <manifest> -content "..." -full                 智能匹配 + 回填
+- /si-all <manifest>                                        Stage 2 + 3 一键
 ```
 
 D.3 **不**自动推进;等用户决策
@@ -190,7 +204,10 @@ D.3 **不**自动推进;等用户决策
 | 情况 | 应对 |
 |---|---|
 | manifest 路径不存在 / 非 `.illus.json` | 报错并提示正确路径 |
-| `--regen` 不配 `-content` | 报错"--regen 必须配 -content" |
+| `--regen` 不配 `-content`(显式 id 模式) | 报错"--regen 必须配 -content"(若只想用 `-content` 智能匹配,去掉 `--regen` 即可) |
+| `-content` 智能匹配:**全 0 分** | 报错"-content 描述与 manifest 不匹配";列出 manifest 所有 picture 的 `topic`+`anchor` 供对照 |
+| `-content` 智能匹配:**并列最高分 ≥ 2** | 报错并列出前 3 候选 + 各自命中证据;提示用户改用 `--regen <id>` 消歧 |
+| `-content` 智能匹配:**唯一匹配但 engine=gemini** | 报错"-content 命中的 picture 是 gemini 引擎,该走 /si-image -g";列出命中的 id |
 | `-mermaid` 与 `-excalidraw` 同时传 | 报错"二者选一" |
 | 目标 picture 全是 `inserted` | 提示"已完成,无需再处理" |
 | mermaid code 校验失败(不含合法关键字) | 该 picture status="error";打印"code 写得不合法" |

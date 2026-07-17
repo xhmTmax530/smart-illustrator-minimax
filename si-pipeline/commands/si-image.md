@@ -1,6 +1,6 @@
 ---
 description: smart-illustrator Stage 2 — 从 {stem}.illus.json 出发,生成创意图(minimax 后端)并回填副本占位符;支持 --prompt-only 预览 prompt
-argument-hint: <manifest.illus.json> [--prompt-only | -p] [-g] [-full] [--backend minimax|gemini]
+argument-hint: <manifest.illus.json> [--prompt-only | -p] [-g] [-full] [--backend minimax|gemini] [<file.png> [-y]]
 allowed-tools: Read Write Edit Bash Glob
 ---
 
@@ -10,7 +10,7 @@ allowed-tools: Read Write Edit Bash Glob
 
 ## 输入
 
-`$ARGUMENTS` = `<manifest.illus.json> [--prompt-only|-p] [-g] [-full] [--backend minimax|gemini]`
+`$ARGUMENTS` = `<manifest.illus.json> [--prompt-only|-p] [-g] [-full] [--backend minimax|gemini] [<file.png> [-y]]`
 
 - 第 1 段(必填):manifest 绝对或相对路径(`~` 自动展开);前置条件:`status` 全是 `planned`(否则报错让人跑 Stage 1 修)
 - 后续段:flag 组合,无序;互斥:
@@ -18,6 +18,13 @@ allowed-tools: Read Write Edit Bash Glob
   - `-g`:走生成;不指定则**仅打印检查点表 + 建议跑 `--prompt-only` 预览**(防误触 API 花钱)
   - `-full`:生成后回填副本(必须配 `-g`)
   - `--backend minimax|gemini`:默认 `minimax`;`gemini` 模式只产出 `status="prompted"` JSON(不调 API,给上游 generate-image.ts 取用)
+- **单图模式**(第 2 段为 `<file.png>` 形式):按图片名定位单张重生 / 插入
+  - 触发条件:第 2 段以 `.png` 结尾(必须是 manifest 中某 picture 的 `filename` 字段 basename,允许带或不带 `images/` 前缀)
+  - `<file.png>` 后无 `-y`:仅重生(覆盖原 PNG),`status="generated"`
+  - `<file.png> -y`:重生 + 回填到副本占位符位置,`status="inserted"`
+  - 与全量 `-g / -g -full` **互斥**(全量模式不接 `.png` 第 2 段)
+  - 单图模式允许 `status` ∈ `{"planned", "generated", "inserted", "error"}`(允许「重新生成已插入的图」)
+  - 仅处理 `engine == "gemini"` 的 picture;mermaid/excalidraw 项交给 `/si-chart`
 
 ## 全局约束(钉死,违反即错)
 
@@ -48,19 +55,24 @@ allowed-tools: Read Write Edit Bash Glob
 - 切 `$ARGUMENTS`,得 `manifest_path` 与 flag 集合(`prompt_only` / `generate` / `full` / `backend`)
 - `~` 展开:`file_path` 以 `~/` 起时 `Bash echo ~` 后重拼
 - 校验 `manifest_path` 必须以 `.illus.json` 结尾(防用户传错)
+- **单图模式识别**:扫描非第 1 段的 token,若任一 token 以 `.png` 结尾 → 触发单图模式:
+  - 把该 `.png` token 取出,得 `target_filename`;剩余 token 中若有 `-y` → `insert_after=true`,否则 `false`
+  - 此时**忽略**全量模式的所有 flag(`--prompt-only` / `-g` / `-full` / `--backend` 都报错"单图模式与全量模式互斥")
 - 校验 flag 互斥:`-p` 与 `-g` 互斥(同时传 → 报错并提示"二者选一")
 - 校验 `-full` 必须配 `-g`(否则报错并提示)
 - 若无 `-p` 也无 `-g`(仅传了 manifest)→ 走检查点路径(只打印建议)
-- `backend` 默认 `minimax`
+- `backend` 默认 `minimax`(单图模式沿用)
 
 ### 2. 读 manifest(分析用 + 后写回)
 
 - `Read` manifest;`Bash python3 -c "import json; m=json.load(open('PATH')); ..."` 校验 schema:
   - `m.pictures` 是 list
   - 每 picture 含 `id/topic/content/engine/type/line/anchor/placeholder/filename/code/status`
-  - 所有 picture.status == `"planned"`(否则**报错并列出 非 planned 的 id 让人修**)
+  - **全量模式(无单图文件名)**:所有 picture.status == `"planned"`(否则**报错并列出 非 planned 的 id 让人修**)
+  - **单图模式(有 `target_filename`)**:不校验全量状态;但要求 `target_filename` basename 能匹配某 picture 的 `filename` 字段 basename(否则报错"图名不在 manifest 中")
 - 得出 `{stem}`(`manifest_path` 去目录与 `.illus.json` 后缀)
 - 计算 `./images/` 路径(相对 manifest 所在目录)
+- **单图模式**额外:`target_filename` 归一化(去前缀 `images/`,只留 basename)→ 在 manifest.pictures 里 grep `os.path.basename(p['filename']) == target_basename`,得到 `target_picture`(单元素);若 0 个匹配报错,> 1 个匹配报错(规范钉死 filename 唯一)
 
 ### 3. 选目标 picture
 
@@ -76,6 +88,7 @@ allowed-tools: Read Write Edit Bash Glob
 - **路径 B(`-g` without `-full`)**:跳到 Step B
 - **路径 C(`-g -full`)**:跳到 Step B 后接 Step C
 - **路径 D(无 flag)**:跳到 Step D
+- **路径 E(单图模式:`target_filename` 已设)**:跳到 Step E;若 `insert_after=true` 再追加 Step F
 
 ### Step A: --prompt-only 路径(只导出 prompt 文本,不动 manifest 原文)
 
@@ -170,6 +183,62 @@ C.4.1 **写后回读校验** `Read manifest`,确认所有目标 picture 的 `sta
 
 C.5 打印完成报告 + 检查点表
 
+### Step E: 单图重生(按文件名,覆盖 PNG)
+
+> 触发条件:`target_filename` 已设;与 Step A/B/C **互斥**(全量模式不接 `.png` 第 2 段)。
+
+E.1 校验 `target_picture.engine == "gemini"`(只有 gemini 由 /si-image 出 PNG;mermaid/excalidraw 走 /si-chart)。
+
+E.2 校验 `target_picture.status` ∈ `{"planned", "generated", "inserted", "error"}`(允许「重新生成已插入的图」)。
+
+E.3 校验 `backend == "minimax"` 时 `MINIMAX_IMAGE_API_KEY` 或 `MINIMAX_API_KEY` env 必须设置(`Bash test -n "$MINIMAX_IMAGE_API_KEY$MINIMAX_API_KEY" || { echo "❌ 请先设置 MINIMAX_IMAGE_API_KEY 环境变量"; exit 1; }`)。
+
+E.4 构造本图 prompt(同 Step A.1 的 gemini 项拼接规则):`prompt = style + "\n\n" + topic + "\n\n" + content`;长度校验 < 1500;超则 P1 裁剪。
+
+E.5 `Bash mkdir -p "<images_dir>"` 建输出目录。
+
+E.6 调 API + 覆盖 PNG(**直接写到 `target_picture.filename` 的绝对路径**):
+
+- `Bash`:`/home/xhm/图片/minimax_t2i.py "<prompt>" --out "<images_dir>/_tmp/" --ratio "16:9" --format base64 --n 1 2>&1 | tail -20`
+- `Bash ls -t "<images_dir>/_tmp/" | head -1` 取最新生成的 `minimax-{i}.jpeg`
+- `Bash mv -f "<images_dir>/_tmp/minimax-{i}.jpeg" "<absolute_target_png_path>"` 覆盖
+- `Bash rm -rf "<images_dir>/_tmp"`
+
+E.7 改写 manifest(就地):
+
+- `filename`:已是 `target_picture.filename`(沿用,无需改)
+- `status`:`"generated"`(成功)/`"error"`(失败)
+- **用 `Write` 整 manifest 文件**(同 Step B.4)
+- **写后回读校验** `Read manifest`,确认目标 picture 的 `status="generated"` 已落地
+
+E.8 检查点表:打印「单图重生 → 覆盖 `<path>` + status=generated」
+
+E.9 若 `insert_after == true` → **继续 Step F**(否则结束)
+
+### Step F: 单图插入(回填副本,要求 `-y`)
+
+> 触发条件:Step E 成功后 `insert_after=true`。等价于全量路径 C 的「单 picture 版本」。
+
+F.1 校验 `target_picture.status == "generated"`(必须 Step E 成功重生,或本来就 generated)。
+
+F.2 `Read` 副本 `{stem}-image.md`。
+
+F.3 `Bash grep -n "<!-- IMAGE:NNN -->" "<copy_path>"` 定位 `target_picture.placeholder`(NNN = target_picture.id 的 3 位零填充)在副本中的行号。
+
+- 若 0 命中:报错"占位符丢失,可能 Stage 1 重跑或用户手改了";**不**强插
+- 若 > 1 命中:报错"占位符重复,manifest 与副本不一致,人工修"
+
+F.4 `Edit` 副本,`old_string` = `<!-- IMAGE:NNN -->\n`(整行),`new_string` = `![](<target_picture.filename>)\n`
+
+- **幂等**:若命中行已是 `![](<target_picture.filename>)`,跳过 Edit
+- 若命中行已是 `![](其他 filename>)`:这是「替换」语义,直接替换(用户用 -y 就是想替换)
+
+F.5 改写 manifest:target_picture.status = `"inserted"`(`Write` 整 manifest)
+
+F.5.1 **写后回读校验** `Read manifest`,确认 `status="inserted"` 已落地
+
+F.6 打印完成报告:「单图重生 + 插入 → `<copy_path>` 第 L 行的 placeholder 已替为 `![](<filename>)`」
+
 ### Step D: 无 flag(只检查点)
 
 D.1 打印检查点表(N,引擎分布,prompt 总字符,目标 picture 数)
@@ -217,25 +286,30 @@ D.3 **不**自动推进;等用户决策
 | 情况 | 应对 |
 |---|---|
 | manifest 路径不存在 / 非 `.illus.json` | 报错并提示正确路径 |
-| manifest 中存在 status != `"planned"` 的 picture | 报错列出非 planned 的 id;提示先跑 Stage 1 重置 |
+| manifest 中存在 status != `"planned"` 的 picture(**全量模式**才校验) | 报错列出非 planned 的 id;提示先跑 Stage 1 重置 |
+| **单图模式 `<file.png>` 但 manifest 找不到匹配** | 报错"图名不在 manifest 中";列出当前 manifest 中所有 `filename` 供对照 |
+| **单图模式 `<file.png>` 匹配 > 1 个 picture**(filename 冲突) | 报错"filename 不唯一,规范违反";列出匹配列表 |
+| **单图模式 `<file.png>` 但 engine != gemini** | 报错"单图重生只支持 gemini;excalidraw/mermaid 走 /si-chart" |
+| **单图模式与全量 flag 同时传**(`--prompt-only` / `-g` / `-full` / `--backend`) | 报错"单图模式与全量模式互斥" |
 | `--prompt-only` 与 `-g` 同时传 | 报错"二者选一" |
 | `-full` 不配 `-g` | 报错"必须有 -g 才有 -full" |
 | 无 manifest_arg | 报错"第 1 段必填 manifest 路径" |
-| MINIMAX_IMAGE_API_KEY / MINIMAX_API_KEY 未设置(`-g` 时) | 报错并提示:`export MINIMAX_IMAGE_API_KEY=...` |
-| `minimax_t2i.py` 调用失败(API 报错 / 超时) | 该 picture `status="error"`,继续下一张,最后打印 error 列表 |
+| MINIMAX_IMAGE_API_KEY / MINIMAX_API_KEY 未设置(`-g` / 单图模式 时) | 报错并提示:`export MINIMAX_IMAGE_API_KEY=...` |
+| `minimax_t2i.py` 调用失败(API 报错 / 超时) | 全量:该 picture `status="error"`,继续下一张。单图:target_picture.status="error",**不**进入 Step F(即使传了 `-y`) |
 | prompt 拼接超 1500 字符 | 应用策略 P1:`content` 截到 1500 - len(style) - len(topic) - 4(分隔符 `\n\n` × 2);若仍超,继续截 `topic`;最后截 `style`;若 style 也撑爆,报错让人手改。**裁剪后必须在 `_meta.truncated_prompts` 记录 id 列表**(--prompt-only 路径) |
-| `<!-- IMAGE:NNN -->` 在副本中找不到(回填时) | 报错"占位符丢失,可能 Stage 1 重跑或用户手改了";**不**强插(避免错位) |
-| JSON 写回后字段丢了 | Step A.2 / Step B.4 写后立即 `Read` 回头校验 11 字段全 + 新增 prompt 与 status;漏则重写 |
+| `<!-- IMAGE:NNN -->` 在副本中找不到(回填时,全量 C 或单图 F) | 报错"占位符丢失,可能 Stage 1 重跑或用户手改了";**不**强插(避免错位) |
+| JSON 写回后字段丢了 | Step A.2 / Step B.4 / Step E.7 / Step F.5 写后立即 `Read` 回头校验 11 字段全 + 新增 prompt 与 status;漏则重写 |
 | minimax 返回的不是 jpeg | 不假设扩展名,read first bytes 判 mime;非 jpeg 则改为 `.bin` 不改 `.png`(`filename` 改后缀;记 warning) |
+| 单图模式 Step E 失败时还传了 `-y` | 报错提示"Step E 失败,跳过 Step F";不部分回填 |
 
 ## 输出文件清单
 
 ```
-{stem}-image.md                       # 副本(仅 -full 时改 placeholder → ![](path)行;原文不动)
-{stem}.illus.json                     # manifest(仅 -g / -full 时改 filename+status;原文不动)
+{stem}-image.md                       # 副本(全量 -full 或单图 -y 时改 placeholder → ![](path)行;原文不动)
+{stem}.illus.json                     # manifest(全量 -g / -full 或单图模式 时改 status;原文不动)
 {stem}.image-prompts.json             # --prompt-only 路径才产出(覆盖全量 picture,prompted)
-./images/                             # -g / -full 时建目录
-└── {stem}-img-NNN.png                # 重命名后的 PNG(每个 gemini picture 一张)
+./images/                             # 全量 -g / -full 或单图模式 时建目录
+└── {stem}-img-NNN.png                # 重命名后的 PNG(每个 gemini picture 一张;单图模式只改命中的那张)
 ```
 
 ## 后续衔接

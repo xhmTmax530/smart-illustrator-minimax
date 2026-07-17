@@ -1,6 +1,6 @@
 ---
 description: smart-illustrator Stage 1 — 生成文章副本 + 插入占位符 + 输出 JSON 清单(等待人工确认后,再跑 /si-image 与 /si-chart)
-argument-hint: <file.md> ["额外提示词"]
+argument-hint: <file.md> [额外提示词…]
 allowed-tools: Read Write Edit Bash Glob
 ---
 
@@ -64,6 +64,28 @@ allowed-tools: Read Write Edit Bash Glob
 - 拟插入位置:用原文前 30 字符 + 行号(供检查点人类复核)
 - `topic`(主题方向,沿用作者 slide 示例措辞,如"流程概览"/"核心概念")
 - `content`(自然语言描述,Stage 1 起草;Stage 2/3 据此渲染)
+
+#### 3.1 额外提示词(`extra_prompt`)的解读规则
+
+若 `extra_prompt` 非空,在选位/选引擎/选类型前**先把整段提示词吃透**,按以下维度映射:
+
+| 用户意图关键词 | 选位/选型调整 |
+|---|---|
+| 「重点配 X 类图」(架构 / 时序 / 流程 / 对比 / 隐喻 / 封面) | 优先把 X 类内容段落标成图片候选;其它段落降权 |
+| 「多放图 / 少放图」 | 数量档位调高/调低一档(短文 1-2 → 2-3;中篇 2-4 → 4-6;长文 4-6 → 6-8) |
+| 「第 N 章重点」 / 「XX 章节多放」 | 该章首/末段落必标图片候选;其它章节照常 |
+| 「少隐喻 / 少封面」 | `gemini` 类型从 `metaphor/scene/cover` 改为 `concept` 优先 |
+| 「风格偏 XX」(扁平 / 手绘 / 商务 / 极简) | `engine` 偏好对齐:`gemini` 走对应 `style-{name}.md`;非默认则通过 `--style` 体现 |
+| 「只配流程图,不要隐喻图」 | `engine` 仅在 `mermaid`/`excalidraw` 中选;`gemini` 全跳过 |
+| 「不要 mermaid」 / 「要 mermaid」 | 直接过滤 engine |
+| 「插图命名习惯 X」 / 「图片前缀 X」 | 记到 manifest `_meta` 字段(扩展位,不破坏 schema) |
+| 「章节 X 用 mermaid sequenceDiagram」 / 「用 mermaid flowchart」 | 强制该 picture 的 `type` 为 `sequence` / `process` 等 |
+
+**优先级**:`extra_prompt` > 默认作者优先级(`Gemini > Excalidraw > Mermaid`) > 内容特征启发式。
+
+**歧义时**:若 `extra_prompt` 与作者优先级冲突,先按 `extra_prompt` 选;在检查点表里用一行标注"已按用户偏好覆盖默认优先级",让用户复核。
+
+**无 `extra_prompt`**:完全走默认启发式,跳过本节。
 
 ### 4. 插入占位符(`Edit` 副本)
 
