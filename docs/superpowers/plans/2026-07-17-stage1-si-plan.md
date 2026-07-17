@@ -17,7 +17,7 @@
 - **引擎优先级**(作者硬规则):`Gemini > Excalidraw > Mermaid`
 - **数量**(作者 README 建议,Claude 据文章长度自决):短文<1000 字 1-2 / 中篇 1000-3000 字 2-4 / 长文>3000 字 4-6 / 教程每主步骤 1 张
 - **清单路径**:`{stem}.illus.json`(紧挨原文)
-- **Style 字段**:从 `{skill_root}/styles/style-{name}.md` **完整拷贝**(默认 `style-light.md`),不简化、不自编
+- **Style 字段**:从 `{skill_root}/styles/style-{name}.md` 的 ``` 代码块内**抽取操作型 Gemini System Prompt**(默认 `style-light.md`)。丢弃前后 markdown 元数据(标题、`## Gemini System Prompt` 标题、闭合 ```、末尾的 `## Prompt 模板`/`## 配图类型` 文档段)——这些是给人读的,不该塞给 Gemini。
 - **JSON = 唯一事实源**:`code` 字段 Stage 1 一律 `""`(Stage 3 才填);`content` 字段为人类校验用,不作第二定位
 - **状态机**:`planned` → `generated` → `inserted`(Stage 1 全部 `planned`)
 - **filename 规则**:
@@ -204,11 +204,16 @@ allowed-tools: Read Write Edit Bash Glob
 
 **幂等**:对每处 `Edit` 前先 `Read` 副本对应行;若 `<!-- IMAGE:NNN -->` 已存在,跳过并复用其编号。
 
-### 5. 读 style(必须用作者原文,不简化)
+### 5. 读 style(提取操作型 Gemini System Prompt)
 
 - 默认路径:`{skill_root}/styles/style-light.md`(`skill_root` = 本 slash command 解析到的仓库根,即 `~/.claude/skills/smart-illustrator`)
 - 若用户传 `--style <name>`,改读 `style-{name}.md`
-- `Read` 该文件全文,**完整内容**塞到 JSON 的 `style` 字段
+- `Read` 该文件全文
+- **抽取** ``` … ``` 代码块**内部**的 Gemini System Prompt,丢弃:
+  - 头部 markdown 元数据(标题、描述、`## 适用场景` 列表、`## Gemini System Prompt` 标题、起始 ```)
+  - 尾部 markdown 文档段(闭合 ```、`## 水印`、`## Prompt 模板`、`## 配图类型 × 构图建议`)
+- 将操作型 prompt 纯文本塞到 JSON 的 `style` 字段
+- 例:`style-light.md` → 提取从 "你是一位信息图绘图大师..." 开始,到第一个闭合 ``` 之前结束的整段
 
 ### 6. 生成 `{stem}.illus.json`
 
@@ -306,6 +311,14 @@ ls -la ~/.claude/commands/si-plan.md
 ```
 
 Expected: 显示 `→ /home/xhm/.claude/skills/smart-illustrator/si-pipeline/commands/si-plan.md`
+
+- [ ] **验证 symlink 目标可解析**
+
+```bash
+target=$(readlink -f ~/.claude/commands/si-plan.md)
+test -f "$target" || { echo "ERROR: symlink broken: $target"; exit 1; }
+echo "symlink OK: $target"
+```
 
 - [ ] **Step 3: 提交**
 
@@ -411,7 +424,8 @@ cat minimal-article.illus.json
 - [ ] `pictures[].code` 全部 `""`
 - [ ] `pictures[].status` 全部 `planned`
 - [ ] `pictures[].filename` 全部 `""`(mermaid 嵌码模式)
-- [ ] `style` 字段是 `style-light.md` 全文(长度 > 1000 字符)
+- [ ] `style` 字段是 `style-light.md` ``` 代码块内的操作型 prompt(长度 > 1000 字符;且与 style-light.md 首段 ```...``` 块内容字符串相等)
+- [ ] `style` 字段不含 '# Style:' 标题或 '## 配图类型' 表格(确认丢弃了 markdown 包装)
 - [ ] `batch_rules.total === 3`
 - [ ] `instruction` 含"请为我绘制 3 张图片"
 

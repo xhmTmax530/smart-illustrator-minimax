@@ -12,12 +12,12 @@ ln -sf "$(pwd)/si-pipeline/commands/si-plan.md" ~/.claude/commands/si-plan.md
 
 ## 命令清单
 
-| 命令 | 阶段 | 说明 |
-|---|---|---|
-| `/si-plan` | Stage 1 | 复制 + 占位符 + 清单(本计划交付) |
-| `/si-image` | Stage 2 | 创意图(minimax 后端) |
-| `/si-chart` | Stage 3 | 结构图(作者引擎 mermaid/excalidraw) |
-| `/si-all` | Stage 2+3 一键 | 全部跑完回填 |
+| 命令 | 阶段 | 状态 | 说明 |
+|---|---|---|---|
+| `/si-plan` | Stage 1 | ✅ 已交付 | 复制 + 占位符 + 清单 |
+| `/si-image` | Stage 2 | 📋 计划中 | 创意图(minimax 后端) |
+| `/si-chart` | Stage 3 | 📋 计划中 | 结构图(作者引擎 mermaid/excalidraw) |
+| `/si-all` | Stage 2+3 | 📋 计划中 | 全部跑完回填 |
 
 ## 设计文档
 
