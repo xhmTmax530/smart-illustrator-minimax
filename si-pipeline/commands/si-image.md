@@ -30,7 +30,7 @@ allowed-tools: Read Write Edit Bash Glob
 5. **每 picture 字段(11 个 + prompt + status="prompted")**(spec §Stage 2 第 113 行):`id / topic / content / engine / type / line / anchor / placeholder / filename / code` 全继承;新增 `prompt`(本 Stage 写);`status` 取值见状态机
 6. **状态机**:
    - 默认检查点:`planned`(不动)
-   - `--prompt-only` 改:`prompted`(只写 JSON,不动副本)
+   - `--prompt-only`:**不写原 manifest**,只产新文件 `{stem}.image-prompts.json`,其内每 picture `status="prompted"`(不动副本)
    - `-g` 改:`generated`(只生 PNG,不动副本)
    - `-g -full` 改:`inserted`(生 PNG + 回填副本)
 7. **filename 规则(spec §JSON schema)**:
@@ -110,7 +110,7 @@ A.2 构造 `{stem}.image-prompts.json`:
       "line": 42,
       "anchor": "...",
       "placeholder": "<!-- IMAGE:001 -->",
-      "filename": "images/{stem}-img-001.png",  // mermaid 嵌码则 ""
+      "filename": "images/{stem}-img-001.png"  // gemini/excalidraw 用;mermaid 嵌码项为 ""
       "code": "",
       "prompt": "<拼接结果,可能被裁剪>",
       "status": "prompted"
@@ -135,7 +135,7 @@ B.3 逐 picture 串行调 API(避免并发 API 限流;若用户后续指定 `-pa
 - 构造本图 prompt(同 Step A.1,但**仅** gemini 项;style + topic + content)
 - 长度校验(< 1500);超则 P1 裁剪
 - `Bash`:`/home/xhm/图片/minimax_t2i.py "<prompt>" --out "<images_dir>/_tmp/" --ratio "16:9" --format base64 --n 1 2>&1 | tail -20` 调起出图(用 `_tmp` 子目录避免与历史产出混淆)
-- `Bash ls "<images_dir>/_tmp/"` 取最新生成的 `minimax-{i}.jpeg`
+- `Bash ls -t "<images_dir>/_tmp/" | head -1` 取最新生成的 `minimax-{i}.jpeg`(加 `-t` 按修改时间排序取最新)
 - `Bash mv "<images_dir>/_tmp/minimax-{i}.jpeg" "<images_dir>/{stem}-img-NNN.png"` 重命名(.jpeg → .png 仅文件重命名;内容字节不动)
 - `Bash rm -rf "<images_dir>/_tmp"` 清理
 
@@ -143,6 +143,9 @@ B.4 改写原 manifest 对应 picture(不是另存,是**就地修改** `manifest
 
 - `filename`:显式写盘后的相对路径
 - `status`:`"generated"`
+- **用 `Write` 整 manifest 文件**(因 `Edit` 在 JSON 行级不稳定;不要用 `Edit` 部分覆盖)
+
+B.4.1 **写后回读校验** `Read manifest`,确认目标 picture 的 `filename` + `status` 已落地;漏则重写
 
 B.5 失败时此 picture 的 status 改 `"error"`(而不是留 `"planned"`);继续下一张;检查点表打印 error 项。
 
@@ -162,6 +165,8 @@ C.3 对每 `status=="generated"` 的 gemini picture:
 - **行号一致性**:`-full` 回填后,`status` 改 `"inserted"`;但 `line` / `anchor` 字段(line + anchor 是占位符行号)此 Stage **不重新计算**(占位符行还在,只是变成了图片引用;回填后的 markdown 行号与原 placeholder 行号 = 同一行;若用户后续删除/移动 placeholder,Stage 1.5 的 line 字段失效,需重跑 Stage 1)
 
 C.4 改写 manifest 后**就地 update** picture.status 为 `"inserted"`(`Write` 整 manifest,因 Edit 在 JSON 行级不稳定)
+
+C.4.1 **写后回读校验** `Read manifest`,确认所有目标 picture 的 `status="inserted"` 已落地;漏则重写
 
 C.5 打印完成报告 + 检查点表
 
