@@ -28,6 +28,10 @@ allowed-tools: Read Write Edit Bash Glob
 9. **Code 字段**:Stage 1 一律 `""`(Stage 3 才填)
 10. **Status**:Stage 1 全部为 `planned`
 11. **filename 字段**:`gemini`/`excalidraw` → `images/{stem}-img-NNN.png`;`mermaid` 嵌码 → `""`
+12. **位置字段(line + anchor)**(Stage 1.5):每个 picture **必须**带:
+    - `line`(int):占位符在 `{stem}-image.md` 副本中的行号(从 1 起)
+    - `anchor`(string):占位符所属最近 markdown 标题(章首则记前一个;全文无标题则 `null`)
+    - slash command Step 4 在插入占位符的**同一动作**里记录两者,不靠事后扫描;两者缺一即 spec violation
 
 ## 执行步骤
 
@@ -73,6 +77,12 @@ allowed-tools: Read Write Edit Bash Glob
 
 **幂等**:对每处 `Edit` 前先 `Read` 副本对应行;若 `<!-- IMAGE:NNN -->` 已存在,跳过并复用其编号。
 
+**记录位置字段(Stage 1.5,hard rule)**:`Edit` 成功后**必须**为本 picture 同时记两条:
+
+- `line` = 占位符在副本中的行号(从 1 起)。`Edit` 后用 `Read` 副本扫一遍取 `<!-- IMAGE:NNN -->` 所在的行号即可
+- `anchor` = 占位符所属最近 markdown 标题(`#`/`##`/`###`…任一级)。建议在 `Edit` 前用 `Read` 取占位符之前最后一个 `^#{1,6} ` 行;章首(占位符在所有标题之前)则记**前一个标题**(可能跨节);全文无标题则 `null`
+- 两者作为 picture 对象字段写入 JSON,非注释、非人工填;缺一即 spec violation
+
 ### 5. 读 style(提取操作型 Gemini System Prompt)
 
 - 默认路径:`{skill_root}/styles/style-light.md`(`skill_root` = 本 slash command 解析到的仓库根,即 `~/.claude/skills/smart-illustrator`)
@@ -107,6 +117,8 @@ allowed-tools: Read Write Edit Bash Glob
       "engine": "gemini|excalidraw|mermaid",
       "type": "<作者类型表枚举>",
       "placeholder": "<!-- IMAGE:001 -->",
+      "line": 42,                              // Stage 1.5:占位符在副本中的行号
+      "anchor": "## 二、IoC 原理",              // Stage 1.5:最近 markdown 标题(无则 null)
       "filename": "images/{stem}-img-001.png",  // mermaid 嵌码模式时为 ""
       "code": "",
       "status": "planned"
@@ -132,11 +144,11 @@ allowed-tools: Read Write Edit Bash Glob
 
 ```text
 [Stage 1 检查点]
-─────────────────────────────
-编号 │ 引擎      │ 类型        │ 拟插入位置(原文行号 + 前 30 字)
-─────┼───────────┼─────────────┼────────────────────────────────
-001  │ gemini    │ metaphor    │ L12 「本文将探讨 AI 协作的隐喻...」
-002  │ mermaid   │ architecture│ L28 「Spring 容器包含三大核心...」
+──────────────────────────────────────────────────────────────────
+编号 │ 引擎      │ 类型        │ 行号 │ 章节锚点        │ 前 30 字
+─────┼───────────┼─────────────┼──────┼─────────────────┼──────────────────────
+001  │ gemini    │ metaphor    │ L12  │ ## 引言         │ 本文将探讨 AI 协作...
+002  │ mermaid   │ architecture│ L28  │ ## 二、IoC 原理  │ Spring 容器包含三大核心...
 ...
 
 ✅ 副本:{copy_path}
