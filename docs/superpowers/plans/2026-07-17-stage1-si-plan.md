@@ -23,6 +23,11 @@
 - **filename 规则**:
   - `gemini` / `excalidraw` → `images/{stem}-img-NNN.png`(Stage 2/3 生成 PNG 时落盘)
   - `mermaid` 嵌代码块模式 → `""`(不生成 PNG 文件)
+- **位置字段(line + anchor)**(Stage 1.5 升级,2026-07-17):每个 picture **必须**带:
+  - `line`(int):占位符在 `{stem}-image.md` 副本中的行号(从 1 起)
+  - `anchor`(string):占位符所属最近 markdown 标题(章首则记前一个;无标题则 `null`)
+  - 这两个字段由 slash command Step 4 **插入占位符的同一动作里**记录,不靠事后扫描
+  - 目的:下游任何阶段从 JSON 一眼读到精确插入位置,不用数换行符
 - **非侵入**:本计划**只新增**文件,不改作者 `SKILL.md` / `scripts/*` / `styles/*` / `references/*`
 - **PR 友好**:Stage 1 完成后,目录结构独立可合入上游
 
@@ -155,10 +160,11 @@ allowed-tools: Read Write Edit Bash Glob
 5. **优先级**:`Gemini > Excalidraw > Mermaid`(作者硬规则)
 6. **数量**:短文(< 1000 字)1-2,中篇(1000-3000)2-4,长文(> 3000)4-6,教程每主步骤 1 张
 7. **清单**:`{stem}.illus.json` 紧挨原文
-8. **Style 字段**:从 `{skill_root}/styles/style-{name}.md` **完整拷贝**(`style-light.md` 默认),不简化
+8. **Style 字段**:从 `{skill_root}/styles/style-{name}.md` 抽取 ``` 代码块内的**操作型 Gemini System Prompt**(默认 `style-light.md`)。丢弃前后 markdown 元数据(标题、`## Gemini System Prompt` 标题、闭合 ```、末尾的 `## Prompt 模板`/`## 配图类型` 文档段)——这些是给人读的,不该塞给 Gemini。
 9. **Code 字段**:Stage 1 一律 `""`(Stage 3 才填)
 10. **Status**:Stage 1 全部为 `planned`
 11. **filename 字段**:`gemini`/`excalidraw` → `images/{stem}-img-NNN.png`;`mermaid` 嵌码 → `""`
+12. **位置字段(line + anchor)**(Stage 1.5 升级):每个 picture **必须**带 `line`(int,占位符在副本中的行号)+ `anchor`(string,最近 markdown 标题;无则 `null`)。slash command Step 4 在插入占位符的同一动作里记两者。
 
 ## 执行步骤
 
@@ -204,6 +210,11 @@ allowed-tools: Read Write Edit Bash Glob
 
 **幂等**:对每处 `Edit` 前先 `Read` 副本对应行;若 `<!-- IMAGE:NNN -->` 已存在,跳过并复用其编号。
 
+**记录位置字段(Stage 1.5 新增,hard rule)**:`Edit` 成功后**必须**为本 picture 记两条:
+- `line` = 占位符在副本中的行号(从 1 起;`Edit` 后用 `Read` 副本取该占位符行号即可)
+- `anchor` = 占位符所属最近 markdown 标题(章首则记前一个;全文无标题则 `null`)。建议在 `Edit` 前用 `Read` 副本取占位符之前的最后一个 `^#{1,6} ` 行
+- 两者**作为 picture 对象字段写入 JSON**,非注释、非人工填;缺一即 spec violation
+
 ### 5. 读 style(提取操作型 Gemini System Prompt)
 
 - 默认路径:`{skill_root}/styles/style-light.md`(`skill_root` = 本 slash command 解析到的仓库根,即 `~/.claude/skills/smart-illustrator`)
@@ -238,6 +249,8 @@ allowed-tools: Read Write Edit Bash Glob
       "engine": "gemini|excalidraw|mermaid",
       "type": "<作者类型表枚举>",
       "placeholder": "<!-- IMAGE:001 -->",
+      "line": 42,                              // Stage 1.5:占位符在副本中的行号
+      "anchor": "## 二、IoC 原理",              // Stage 1.5:最近 markdown 标题(无则 null)
       "filename": "images/{stem}-img-001.png",  // mermaid 嵌码模式时为 ""
       "code": "",
       "status": "planned"
@@ -263,11 +276,11 @@ allowed-tools: Read Write Edit Bash Glob
 
 ```text
 [Stage 1 检查点]
-─────────────────────────────
-编号 │ 引擎      │ 类型        │ 拟插入位置(原文行号 + 前 30 字)
-─────┼───────────┼─────────────┼────────────────────────────────
-001  │ gemini    │ metaphor    │ L12 「本文将探讨 AI 协作的隐喻...」
-002  │ mermaid   │ architecture│ L28 「Spring 容器包含三大核心...」
+──────────────────────────────────────────────────────────────────
+编号 │ 引擎      │ 类型        │ 行号 │ 章节锚点        │ 前 30 字
+─────┼───────────┼─────────────┼──────┼─────────────────┼──────────────────────
+001  │ gemini    │ metaphor    │ L12  │ ## 引言         │ 本文将探讨 AI 协作...
+002  │ mermaid   │ architecture│ L28  │ ## 二、IoC 原理  │ Spring 容器包含三大核心...
 ...
 
 ✅ 副本:{copy_path}
