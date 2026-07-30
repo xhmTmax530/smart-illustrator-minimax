@@ -93,7 +93,47 @@
 
 ---
 
-## Section 7: 已知限制
+## Section 7: -content 智能匹配（v2 增强）
+
+文章配图模式新增 `-content "..."` 自然语言定位 flag,与 `--regen N` / `--force` 互补。
+
+**使用场景**：
+
+| flag | 用户记忆成本 | 精确度 |
+|---|---|---|
+| `--regen N` | 需查 manifest 记 id | 最精确 |
+| `-content "..."` | 自然语言 | 子串匹配,有歧义可能 |
+| `--force` | 零 | 全量 |
+
+**匹配规则**（按 picture 数组逐张打分）：
+
+| 维度 | 加分 | 例子 |
+|---|---|---|
+| 关键词命中(topic/anchor/content 子串,大小写不敏感) | +10 | "MVC 路由" → topic="MVC 路由流程" |
+| 章节锚点命中(描述含「第 N 节」) | +5 | "第 4.2 节" → anchor="4.2 参数注解..." |
+| 类型命中(描述含「流程图/时序图/对比图/架构图/概念图/隐喻图」) | +3 | "时序图" → type="sequence" |
+
+**三种结果**：
+
+- 最高分唯一 → 自动选中并重生
+- 并列 ≥ 2 → 报错列前 3 候选(id + topic + anchor + 命中维度),要求用 `--regen <id>` 消歧
+- 全 0 分 → 报错列所有 picture 的 id + topic + anchor 供改写描述
+
+**互斥规则**：
+
+- `-content` 与 `--force` 互斥(同时传报错)
+- `-content` 与 `--regen N` 同传时 `--regen N` 优先(显式 id 更精确)
+
+**已知限制**：
+
+- 子串匹配,大小写不敏感但不分词("IoC" 不会拆成 "I" "o" "C")
+- 同义词不匹配("架构图" vs "architecture",靠 type 命中+3 分勉强覆盖)
+- 复杂描述可能并列(如 "架构" 同时命中多张架构图)
+- 端到端未测(依赖 minimax API,配额暂停);逻辑已通过 fixture 模拟确认
+
+**设计参考来源**:deepseek commit `01b6809` 的 `-content` 智能匹配设计(spec 第 78-84 行)。
+
+## Section 8: 已知限制（接上）
 
 - minimax 配额有限，大量文章配图可能需分批
 - `--regen`/`--force` 在 minimax API 不可用时只能重生 mermaid/excalidraw (走作者脚本，无 API 依赖)

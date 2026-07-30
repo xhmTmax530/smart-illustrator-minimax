@@ -34,6 +34,29 @@
 
 > ⚠ 路径含空格必须加引号(传给 Claude 的 `$ARGUMENTS` 按空格切分)
 
+### 自然语言定位（-content）
+
+```bash
+# 用自然语言描述想重生的图（按 topic/anchor/content 自动匹配）
+/smart-illustrator-minimax "~/文档/技术文章.md" -content "MVC 路由时序图"
+
+/smart-illustrator-minimax "~/文档/技术文章.md" -content "AOP 那张"
+
+/smart-illustrator-minimax "~/文档/技术文章.md" -content "第 4.2 节那张"
+```
+
+**匹配规则**：
+- 关键词命中（topic/anchor/content 含描述词）→ +10
+- 章节锚点命中（描述含「第 N 节」）→ +5
+- 类型命中（描述含「流程图/时序图/对比图/架构图/概念图/隐喻图」）→ +3
+
+**三种结果**：
+- 最高分唯一 → 自动选中并重生
+- 并列 ≥ 2 → 报错列前 3 候选，要求用 `--regen <id>` 消歧
+- 全 0 分 → 报错列所有 picture 的 id + topic + anchor
+
+> `-content` 与 `--force` 互斥。`-content` 与 `--regen N` 同传时 `--regen N` 优先（显式 id 更精确）。
+
 ## 工作流(与作者 spec 对齐)
 
 ```
