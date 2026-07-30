@@ -14,6 +14,24 @@
 /smart-illustrator-minimax "~/文档/技术文章.md" "重点配架构图,少隐喻"
 ```
 
+### 单图重生 / 强制重来
+
+```bash
+# 只重生第 3 张图(其余跳过)
+/smart-illustrator-minimax "~/文档/技术文章.md" --regen 3
+
+# 重生第 2 和第 5 张
+/smart-illustrator-minimax "~/文档/技术文章.md" --regen 2 --regen 5
+
+# 全部重来
+/smart-illustrator-minimax "~/文档/技术文章.md" --force
+
+# --force 与 extra hints 可同时用
+/smart-illustrator-minimax "~/文档/技术文章.md" --force "少隐喻,全用 mermaid"
+```
+
+> `--regen N`:文件名不变 → `![](images/{stem}-img-03.png)` 自动指向新图,无需改副本。
+
 > ⚠ 路径含空格必须加引号(传给 Claude 的 `$ARGUMENTS` 按空格切分)
 
 ## 工作流(与作者 spec 对齐)
