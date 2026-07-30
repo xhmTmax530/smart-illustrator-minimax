@@ -138,3 +138,41 @@
 - minimax 配额有限，大量文章配图可能需分批
 - `--regen`/`--force` 在 minimax API 不可用时只能重生 mermaid/excalidraw (走作者脚本，无 API 依赖)
 - 当前未做端到端测试 (minimax 配额暂停); 逻辑已通过 fixture 模拟确认 (skip-existing + PNG 覆盖)
+
+---
+
+## Section 9: 早退分支设计
+
+### 设计动机
+
+用户第二次调用 `/smart-illustrator-minimax <file.md> --regen N` 时，如果每次都重新走全文分析（Read → 心跳分析 → 位置决策），对于只想重生第 N 张图的场景是极大浪费：读全文消耗 token，心跳分析消耗 token，cp 副本写入也是 IO。
+
+早退分支的核心价值：**以 manifest 为唯一控制平面，让第二次调用的用户跳过所有不必要的步骤，直接覆盖目标 PNG。**
+
+### manifest 作为控制平面
+
+`/tmp/si-plan-{stem}.json` 在路径 4（首次全流程）中必写，路径 1/2/3 纯读 manifest 不写。manifest 缺失时，所有 flag 均退回路径 4，不报错（退化为"首次运行"行为）。
+
+Step 0 的 manifest 检测是**最先执行的**，在任何分析之前。这确保了早退路径不会被误触发。
+
+### v1/v2 兼容性策略
+
+| 场景 | 处理 |
+|------|------|
+| 新代码读 v1 manifest | `source_file`/`source_prompt` → `null`，路径 1 降级报错；路径 2 尝试从 `content` 重建 |
+| v1 + `--regen` mermaid/excalidraw 缺源文件 | 报错"请用 --force 重建" |
+| 旧代码读 v2 manifest | JSON.parse 忽略未知字段，完全兼容 |
+| v2 写回 v1 文件 | 只追加字段（`anchor`/`source_file`/`source_prompt`），不删除原有字段 |
+
+### 与原 deepseek commit `01b6809` 的偏差
+
+commit `01b6809` 引入 manifest 概念，但本 fork 的早退分支**只重 manifest 字段，不重 manifest 概念**：
+
+| 维度 | `01b6809` 设计 | 本 fork 设计 |
+|------|---------------|------------|
+| manifest 角色 | 外部状态机，控制心跳流程 | 只读快照，路径 1/2/3 的控制平面 |
+| 心跳与 manifest 关系 | manifest 驱动心跳状态机 | 心跳 = 状态机（沿用），manifest = 快照 |
+| 路径 1 行为 | 依赖完整的状态转移 | 只读 manifest，零不动副本 |
+| `--force` 行为 | 重写 manifest + 重新分析 | 只覆盖 PNG（manifest 内容不变） |
+
+本 fork 不引入新的状态机，manifest 是**快照而非状态转移器**，这是与 `01b6809` 的根本差异。

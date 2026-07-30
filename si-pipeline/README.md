@@ -57,6 +57,58 @@
 
 > `-content` 与 `--force` 互斥。`-content` 与 `--regen N` 同传时 `--regen N` 优先（显式 id 更精确）。
 
+### 早退分支模式（manifest 驱动）
+
+manifest（`/tmp/si-plan-{stem}.json`）是早退分支的**唯一控制平面**。通过 Step 0 先检测 manifest 是否存在，再按 flag 分流到 4 条路径。
+
+#### 四条路径
+
+| 路径 | 触发条件 | 行为 |
+|------|---------|------|
+| **路径 1** | manifest 存在 + `--regen N` | 只覆盖第 N 张 PNG，**零不动**（不读原文、不 cp 副本、不 Edit 副本） |
+| **路径 2** | manifest 存在 + `--force` | 全量遍历 manifest，重生所有 PNG，源文件缺失时从 manifest 内容重建 |
+| **路径 3** | manifest 存在 + `-content "..."` | 自然语言打分匹配，唯一最高分 → 转路径 1；并列/零分 → 报错 |
+| **路径 4** | manifest 不存在 / 无 flag | 默认全流程（Read → 心跳分析 → 写 manifest → 生成 → cp 副本插图） |
+
+#### manifest v2 schema 变更
+
+路径 1/2 依赖 manifest 中新增的**两个关键字段**：
+
+```json
+{
+  "_meta": { "schema": "si-minimax/v2", ... },
+  "pictures": [
+    {
+      "id": 1,
+      "engine": "mermaid",
+      "topic": "...",
+      "content": "...",
+      "anchor": "<段落描述>",
+      "source_file": "<.mmd/.excalidraw 路径>",
+      "source_prompt": "<gemini 完整 prompt>"
+    }
+  ]
+}
+```
+
+| 字段 | 用途 | 适用引擎 |
+|------|------|---------|
+| `anchor` | 段落锚点描述 | 全部 |
+| `source_file` | mermaid/excalidraw 源文件路径，重生时直接导出 PNG | mermaid / excalidraw |
+| `source_prompt` | gemini/minimax 原始 prompt，重生时还原 | gemini |
+
+v1 缺这两个字段时：gemini 用 `topic` 降级构造；mermaid/excalidraw 源文件缺失则报错"请用 `--force` 重建"。
+
+#### 零不动原则
+
+路径 1/2/3 绝对不做：
+- ❌ Read 原文
+- ❌ cp 副本
+- ❌ Edit 副本
+- ❌ LLM 重新分析位置
+
+副本里的 `![](images/{stem}-img-NN.png)` 引用**始终指向同名 PNG**，覆盖后自动生效，无需修改副本。
+
 ## 工作流(与作者 spec 对齐)
 
 ```
