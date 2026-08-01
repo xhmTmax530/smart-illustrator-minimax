@@ -30,7 +30,7 @@
 /smart-illustrator-minimax "~/文档/技术文章.md" --force "少隐喻,全用 mermaid"
 ```
 
-> `--regen N`:文件名不变 → `![](images/{stem}-img-03.png)` 自动指向新图,无需改副本。
+> `--regen N`:文件名不变 → `![]({stem}-image-03.png)` 自动指向新图,无需改副本。
 
 > ⚠ 路径含空格必须加引号(传给 Claude 的 `$ARGUMENTS` 按空格切分)
 
@@ -59,24 +59,37 @@
 
 ### 早退分支模式（manifest 驱动）
 
-manifest（`/tmp/si-plan-{stem}.json`）是早退分支的**唯一控制平面**。通过 Step 0 先检测 manifest 是否存在，再按 flag 分流到 4 条路径。
+manifest（`{stem}.si-plan.json`，**文章目录**，与 `{stem}-image.md` 平级）是早退分支的**唯一控制平面**。通过 Step 0 先检测 manifest 是否存在，再按 flag 分流到 4 条路径。Step 0 第一步强制 `cd "$(dirname "$ARTICLE")"`，后续所有路径在文章目录解析。
 
 #### 四条路径
 
 | 路径 | 触发条件 | 行为 |
 |------|---------|------|
 | **路径 1** | manifest 存在 + `--regen N` | 只覆盖第 N 张 PNG，**零不动**（不读原文、不 cp 副本、不 Edit 副本） |
-| **路径 2** | manifest 存在 + `--force` | 全量遍历 manifest，重生所有 PNG，源文件缺失时从 manifest 内容重建 |
+| **路径 2** | manifest 存在 + `--force` | 全量遍历 manifest，重生所有 PNG（源文件缺失报错跳过，不做 content 重建） |
 | **路径 3** | manifest 存在 + `-content "..."` | 自然语言打分匹配，唯一最高分 → 转路径 1；并列/零分 → 报错 |
-| **路径 4** | manifest 不存在 / 无 flag | 默认全流程（Read → 心跳分析 → 写 manifest → 生成 → cp 副本插图） |
+| **路径 4** | manifest 不存在 + 无 flag / 无 flag + 原文已变 / 「复用」 | 默认全流程（Read → 心跳分析 → 写 manifest → 生成 → cp 副本插图）；「复用」分支跳过 LLM 重新分析，沿用现有 manifest 执行 skip-existing |
 
-#### manifest v2 schema 变更
+**关键规则（v3）**：
+- **manifest 不存在 + 任一 flag（`--force`/`--regen`/`-content`）→ 报错退出**："manifest 不存在({path}),请先跑一次不带 flag 的完整流程生成"。绝不静默回退路径 4。
+- 旧版 manifest（v1/v2，含 /tmp 旧位置）→ 显式拒绝："旧版 manifest({path}),请重跑完整流程升级为 v3"。
+- manifest 损坏（JSON 解析失败）→ "manifest 损坏({path}),请删除后重跑完整流程"。
+- 原文已修改（mtime/size 不符）→ 路径 1/2/3 警告"原文已修改({date}),图片可能过时;确认继续则手动回复继续"。
+- **无 flag + manifest 存在 + 原文未变** → 展示 manifest 摘要表（编号/引擎/源文件/status），询问**「复用」（推荐,幂等）还是「重新分析」**。原文已变 → 直接重新分析（带提示）。
 
-路径 1/2 依赖 manifest 中新增的**两个关键字段**：
+#### manifest v3 schema
 
 ```json
 {
-  "_meta": { "schema": "si-minimax/v2", ... },
+  "_meta": {
+    "schema": "si-minimax/v3",
+    "source": "<文章规范化绝对路径>",
+    "source_mtime": "<stat -c %Y>",
+    "source_size": "<stat -c %s>",
+    "produced_at": "<ISO8601>",
+    "total": <N>,
+    "by_engine": { "gemini": <M>, "excalidraw": <E>, "mermaid": <R> }
+  },
   "pictures": [
     {
       "id": 1,
@@ -84,8 +97,9 @@ manifest（`/tmp/si-plan-{stem}.json`）是早退分支的**唯一控制平面**
       "topic": "...",
       "content": "...",
       "anchor": "<段落描述>",
-      "source_file": "<.mmd/.excalidraw 路径>",
-      "source_prompt": "<gemini 完整 prompt>"
+      "source_file": "<.mmd/.excalidraw 路径,相对文章目录>",
+      "source_prompt": "<gemini 完整 prompt>",
+      "status": "planned|generated|failed"
     }
   ]
 }
@@ -93,11 +107,11 @@ manifest（`/tmp/si-plan-{stem}.json`）是早退分支的**唯一控制平面**
 
 | 字段 | 用途 | 适用引擎 |
 |------|------|---------|
-| `anchor` | 段落锚点描述 | 全部 |
-| `source_file` | mermaid/excalidraw 源文件路径，重生时直接导出 PNG | mermaid / excalidraw |
+| `anchor` | 段落锚点描述（-content 评分） | 全部 |
+| `source_file` | mermaid/excalidraw 源文件路径（相对文章目录），重生时直接导出 PNG | mermaid / excalidraw |
 | `source_prompt` | gemini/minimax 原始 prompt，重生时还原 | gemini |
-
-v1 缺这两个字段时：gemini 用 `topic` 降级构造；mermaid/excalidraw 源文件缺失则报错"请用 `--force` 重建"。
+| `status` | 执行状态，每张图执行后更新，报告表格展示 | 全部 |
+| `_meta.source_mtime/source_size` | 陈旧检测：原文修改后警告 | 全部 |
 
 #### 零不动原则
 
@@ -107,7 +121,7 @@ v1 缺这两个字段时：gemini 用 `topic` 降级构造；mermaid/excalidraw 
 - ❌ Edit 副本
 - ❌ LLM 重新分析位置
 
-副本里的 `![](images/{stem}-img-NN.png)` 引用**始终指向同名 PNG**，覆盖后自动生效，无需修改副本。
+副本里的 `![]({stem}-image-NN.png)` 引用**始终指向同名 PNG**，覆盖后自动生效，无需修改副本。
 
 ## 工作流(与作者 spec 对齐)
 
@@ -118,12 +132,12 @@ Claude Code 读 SKILL.md 的启发式规则
   ↓
 Step 1 读原文
 Step 2 心跳分析(识别 3-5 个配图位置 + 选 engine)
-Step 3 (可选) 写规划快照到 /tmp/si-plan-{stem}.json
+Step 3 (必做) 写 manifest 到文章目录 {stem}.si-plan.json (v3 schema,写后 jq -e 校验)
 Step 4 循环每张图:
-        gemini     → minimax_t2i.py        → PNG
-        mermaid    → 作者 mermaid-export   → PNG
-        excalidraw → 作者 excalidraw-export → PNG
-Step 5 复制原文为 {stem}-image.md,在心跳记的位置插 ![](...)
+        gemini     → minimax_t2i.py        → {stem}-image-NN.png
+        mermaid    → 作者 mermaid-export   → {stem}-image-NN.png
+        excalidraw → 作者 excalidraw-export → {stem}-image-NN.png
+Step 5 复制原文为 {stem}-image.md,在心跳记的位置插 ![](...)(副本已存在 → diff 摘要 → 询问覆盖)
 Step 6 报告产物
 ```
 
@@ -133,24 +147,24 @@ Step 6 报告产物
 
 | 维度 | 原版 `/smart-illustrator` | 本命令 |
 |---|---|---|
-| 创意图 | Gemini API | minimax_t2i.py(本地) |
+| 创意图 | Gemini API | minimax_t2i.py(本地,调用契约实测:位置 prompt + `--out` 目录 + `--ratio 16:9`) |
 | mermaid | `mermaid-export.ts` | ✅ 完全复用,不改 |
 | excalidraw | `excalidraw-export.ts` | ✅ 完全复用,不改 |
-| PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用 |
+| PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用(文章目录顶层,v3 起) |
 | 插入机制 | Claude 心跳 | ✅ 沿用(同一机制) |
 | 作者代码改动 | — | **0 行** |
 
-## 唯一新增的产物(可选)
+## manifest(必做,双角色)
 
-`/tmp/si-plan-{stem}.json` — 规划快照,用户可 `cat` 检查。
-**不参与控制流**,纯快照。心跳里的信息才是状态。
+`{stem}.si-plan.json`(文章目录,与 `{stem}-image.md` 平级,v3 schema)——**快照 + 控制平面双角色**:路径 4 必写(写后 `jq -e .` 校验),路径 1/2/3 只读。生命周期与文章一致(随目录备份/移动),重启不丢。
 
 ## 必备依赖
 
 - Bun(运行作者 ts 脚本)
 - Mermaid CLI(`npm i -g @mermaid-js/mermaid-cli`)
 - Playwright + Firefox(Excalidraw 导出依赖)
-- minimax 脚本 + `MINIMAX_API_KEY` 环境变量
+- minimax 脚本 + `MINIMAX_IMAGE_API_KEY`(或回落 `MINIMAX_API_KEY`)环境变量
+- jq(路径 1/2/3 的 manifest 读取依赖)
 
 ## 非侵入承诺
 
@@ -159,7 +173,7 @@ Step 6 报告产物
 - ❌ 不改 `styles/*.md`
 - ❌ 不改 `references/*.md`
 - ❌ 不改 `{stem}.md`(原文)
-- ✅ 只写:`{stem}-image.md`、`images/*.{png}`、`{chart}.mmd/.excalidraw`、`/tmp/si-plan-*.json`
+- ✅ 只写:`{stem}-image.md`、`{stem}-image-*.png`(顶层)、`{chart}.mmd/.excalidraw`、`{stem}.si-plan.json`(文章目录)
 
 ## PR 策略
 

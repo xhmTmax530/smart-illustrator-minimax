@@ -12,8 +12,8 @@
 | mermaid 导出 | `scripts/mermaid-export.ts` | ✅ 完全复用，零改 |
 | excalidraw 导出 | `scripts/excalidraw-export.ts` | ✅ 完全复用，零改 |
 | 文章插图位置 | Claude 心跳记忆，无外部状态机 | ✅ 沿用同一机制 |
-| PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用 |
-| 状态机 | 作者用心跳 = 状态机 | ✅ 沿用 (原 deepseek 引入 manifest 已被 2fd737c refactor 撤掉) |
+| PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用（v3 起迁回作者风格：文章目录顶层） |
+| 状态机 | 作者用心跳 = 状态机 | ✅ 沿用 (manifest 保留为早退分支控制平面，v3 起迁至文章目录，见 Section 10) |
 | 单图重生 | `--regenerate <ids>` (slides 模式，作者 `batch-generate.ts` 行 341) | ✅ 文章模式新增 `--regen N` (等价 skip-existing 逻辑) |
 | 强制重来 | `--force` (slides 模式) | ✅ 文章模式新增 `--force` |
 | 配置文件 | `config.json` (项目/用户两级) | ✅ 完全沿用 |
@@ -29,7 +29,7 @@
   if file_exists and not force and id not in regen_ids:
       skip
   ```
-- **关键洞察**: 文件名不变 → 副本 `![](images/{stem}-img-NN.png)` 自动指向新图，**零额外操作**
+- **关键洞察**: 文件名不变 → 副本 `![]({stem}-image-NN.png)` 自动指向新图，**零额外操作**
 - 默认行为: 已有 PNG → 跳过 (避免 API 重复扣费)
 - 来源: 来自 commit `01b6809` 的 deepseek 偏差补丁设计参考 + 作者 `batch-generate.ts` 的 skip-existing 模式
 
@@ -39,8 +39,15 @@
 
 - 原因: 用户没订阅 Gemini; minimax 是国内可用 API
 - 唯一差异: `scripts/generate-image.ts` → `~/图片/minimax_t2i.py` (用户本地脚本)
-- 调用方式: `python3 ~/图片/minimax_t2i.py --prompt-file <tmp.txt> --output <png>`
-- 环境变量: `MINIMAX_API_KEY` (无 fallback)
+- 调用方式(实测契约 2026-08-01,`python3 ~/图片/minimax_t2i.py -h`):
+  ```
+  python3 ~/图片/minimax_t2i.py "$(cat /tmp/si-prompt-NN.txt)" --out /tmp/si-out-NN --ratio 16:9
+  mv /tmp/si-out-NN/minimax-0.jpeg {stem}-image-NN.png
+  ```
+  - prompt 是**位置参数**(≤1500 字符);`--out` 是**输出目录**;产物固定 `minimax-{i}.jpeg`
+  - **不存在 `--prompt-file` / `--output` flag**
+  - `--ratio` 支持 16:9,固定传 16:9
+- 环境变量: `MINIMAX_IMAGE_API_KEY` 首选,回落 `MINIMAX_API_KEY`(检查时任一存在即可)
 - 限制: minimax 配额有限，可能触发 `QuotaExceeded` → 该图跳过，继续下一张
 
 ---
@@ -53,7 +60,7 @@
 ❌ 不改 styles/*.md
 ❌ 不改 references/*.md
 ❌ 不改 {stem}.md (原文)
-✅ 只写: {stem}-image.md (副本)、images/*.{png}、{chart}.mmd/.excalidraw、/tmp/si-plan-*.json
+✅ 只写: {stem}-image.md (副本)、{stem}-image-*.png、{chart}.mmd/.excalidraw、{stem}.si-plan.json (文章目录)
 ```
 
 ---
@@ -151,18 +158,17 @@
 
 ### manifest 作为控制平面
 
-`/tmp/si-plan-{stem}.json` 在路径 4（首次全流程）中必写，路径 1/2/3 纯读 manifest 不写。manifest 缺失时，所有 flag 均退回路径 4，不报错（退化为"首次运行"行为）。
+`{stem}.si-plan.json`(文章目录,与 `{stem}-image.md` 平级;v3 起)在路径 4(首次全流程)中必写,路径 1/2/3 纯读 manifest 不写。**manifest 缺失 + 任一 flag → 报错退出**("请先跑一次不带 flag 的完整流程生成"),绝不静默回退路径 4(v3 修复,原"缺失即退回路径 4"表述已废弃)。
 
 Step 0 的 manifest 检测是**最先执行的**，在任何分析之前。这确保了早退路径不会被误触发。
 
-### v1/v2 兼容性策略
+### 版本兼容策略(v3 起)
 
 | 场景 | 处理 |
 |------|------|
-| 新代码读 v1 manifest | `source_file`/`source_prompt` → `null`，路径 1 降级报错；路径 2 尝试从 `content` 重建 |
-| v1 + `--regen` mermaid/excalidraw 缺源文件 | 报错"请用 --force 重建" |
-| 旧代码读 v2 manifest | JSON.parse 忽略未知字段，完全兼容 |
-| v2 写回 v1 文件 | 只追加字段（`anchor`/`source_file`/`source_prompt`），不删除原有字段 |
+| 新代码读 v1/v2 manifest | **显式拒绝**:报错"旧版 manifest({path}),请重跑完整流程升级为 v3",exit 1;不做从 `content` 重建的死代码 |
+| 旧代码读 v3 manifest | JSON.parse 忽略未知字段,完全兼容(仅理论场景,本 fork 唯一读者即命令自身) |
+| v2 → v3 迁移 | 无原地迁移:路径 4 总是全量重写 manifest(新位置 + v3 schema + status + source_mtime/source_size) |
 
 ### 与原 deepseek commit `01b6809` 的偏差
 
@@ -185,4 +191,67 @@ commit `01b6809` 引入 manifest 概念，但本 fork 的早退分支**只重 ma
 | `-content` + `--force` | **硬互斥，报错退出**（2026-07-30 修复场景 9） |
 | `-content` + `--regen N` | `--regen N` 优先（显式 id 更精确） |
 
-**范围校验**：路径 1 的 `--regen N` 在 jq 抽取之前做严格范围检查，N 超范围时报错跳过，**不调用任何 jq**，确保 manifest 和 PNG 不被副作用修改（2026-07-30 修复场景 4）。
+**范围校验**：路径 1 的 `--regen N` 在 jq 抽取之前做严格范围检查，N 超范围时报错跳过，**不调用任何 jq**，确保 manifest 和 PNG 不被副作用修改（2026-07-30 修复场景 4）。v3 强化：**前置全量校验**——先校验全部 id(正整数、去重、范围内、`_meta.total == pictures.length`),任一非法即报错 exit 1,**零执行**;校验通过才逐个执行。
+
+---
+
+## Section 10: v3 重设计（2026-08-01）
+
+### 背景:4 份审查报告发现的三大致命伤
+
+2026-07-31 由 4 个审查 agent 对命令体（`~/.claude/commands/smart-illustrator-minimax.md`）做了逻辑 / manifest 设计 / 集成 / 场景体验四维审查（`/tmp/review-{logic,manifest,integration,ux}.md`），三大致命伤：
+
+| # | 致命伤 | 后果 |
+|---|--------|------|
+| 1 | **minimax 调用契约与真实脚本不符**:命令写死 `--prompt-file` / `--output`,脚本实际是**位置参数 prompt**(≤1500 字符)+ `--out <目录>` + 产物固定 `minimax-{i}.jpeg`,支持 `--ratio` | 所有 gemini 分支 100% 失败,argparse 直接报错退出 |
+| 2 | **manifest 放 /tmp**:tmpfs + systemd-tmpfiles 10 天清理双重失联,manifest 生命周期远短于文章 | 重启/清理后 `--regen`/`--force`/`-content` 全部失效 |
+| 3 | **cwd 敏感**:早退路径按会话 cwd 解析相对路径,不在文章目录调用时 PNG/源文件落到错误位置(幽灵图) | 跨目录二次调用静默写错位置,报告谎报成功 |
+
+### 用户三项决策
+
+1. **manifest 放原文旁** `{stem}.si-plan.json`(文章目录,与 `{stem}-image.md` 平级)
+2. **无 flag 重跑时询问**"复用规划还是重新分析"(回复「复用」或「重新分析」)
+3. **PNG 命名改成作者风格** `{stem}-image-NN.png`(顶层,NN 两位零填充从 01;v2 的 `images/{stem}-img-NN.png` 废弃,产物已迁移)
+
+### v3 schema 变更（`_meta.schema` = `si-minimax/v3`）
+
+| 变更 | 内容 |
+|------|------|
+| 位置 | `/tmp/si-plan-{stem}.json` → 文章目录 `{stem}.si-plan.json`(旧位置命中时提示"已迁移,请重跑完整流程刷新") |
+| `_meta.source` | 规范化绝对路径(realpath) |
+| `_meta.source_mtime` / `source_size` | stat 文章记录,Step 0 陈旧检测(原文已修改 → 警告/提示) |
+| picture.status | 恢复 `"planned\|generated\|failed"`,每张图执行后更新(报告表格加 status 列) |
+| `source_file` | 相对文章目录路径(Step 0 强制 cd 后解析无歧义) |
+| 版本兼容 | v1/v2 → 显式拒绝("请重跑完整流程升级为 v3"),删除 content 重建死代码 |
+
+### v3 修复清单（对应审查发现）
+
+| 审查发现 | v3 修复 |
+|----------|---------|
+| minimax 契约不符(S1-1×4 报告) | 实测 `-h` 记录契约:位置 prompt + `--out` 目录 + `mv minimax-0.jpeg`;禁 `--prompt-file`/`--output`;固定 `--ratio 16:9` |
+| prompt >1500 字符(S1-2 integration) | 压缩策略:Read style 文件 → 提取核心要点(色板/构图/禁忌)→ 拼 topic + content → `wc -c` 校验,超限先截 content 再截 style,topic 与视觉核心必须保留 |
+| key 检查(S3-3 integration) | `MINIMAX_IMAGE_API_KEY` 或 `MINIMAX_API_KEY` 任一存在即可 |
+| cwd 敏感(S1-2 manifest / S2-2 integration) | Step 0 **强制 cd** `cd "$(dirname "$ARTICLE")"`,所有路径第一步;ARTICLE 先 realpath 规范化 |
+| /tmp 失联(S1-1 manifest / S1-1 ux) | manifest 迁至文章目录 |
+| 陈旧检测缺失(S1-3 manifest / S3-11 logic) | `_meta.source_mtime/source_size` + Step 0 对比;路径 1/2/3 警告"确认继续则手动回复继续",路径 4 提示按当前内容重新分析 |
+| 坏 JSON 无定义行为(S1-4 manifest / S4-13 logic) | Step 3 写后 `jq -e .` 校验失败报错;Step 0 读前 `jq -e .` 校验,损坏报"manifest 损坏({path}),请删除后重跑完整流程" |
+| planned≠generated(S1-5 manifest) | 恢复 status 字段 + 每图执行后更新 + 报告列 |
+| regen 校验交错(S2-1 logic) | 前置全量校验(正整数/去重/范围/total 一致),任一非法 exit 1 **零执行** |
+| pictures[N-1] 下标(S2-2 logic) | 按 id 查找:`jq -e --argjson id N '.pictures[] \| select(.id == $id)'` |
+| manifest 缺失行为三处矛盾(S2-7 logic / S2-3 manifest) | 统一:缺失 + flag → 报错 exit 1;缺失 + 无 flag → 路径 4。删除"静默回退"表述 |
+| v1 content 重建死代码(S3-1 logic) | 显式拒绝旧版,不做重建 |
+| 副本覆盖矛盾(S3-4 logic) | Step 5 与失败表统一:副本已存在 → diff 摘要 → 询问覆盖 |
+| 命名三处漂移(S3-9 logic / S3-1 integration) | 统一 `{stem}-image-NN.png` 顶层;删除"100% 沿用"错误声明改为如实描述;现有产物已迁移 |
+| 无 flag 重跑漂移(S4-2 manifest / S1-3 ux) | 无 flag + manifest 存在 + 原文未变 → 摘要表 + 询问「复用」/「重新分析」;原文已变 → 直接重新分析(带提示) |
+| 编号/源文件对应不可知(S2-2 ux) | 报告表格加 `source_file` 列(相对文章目录),编号两位(01) |
+| 副本内容被微改(S2-5 ux) | 硬规则:禁改原文任何文字(含标点);插图后 diff 校验只允许新增图片行+空行 |
+| 插图落在标题与 --- 之间(S2-6 ux) | 硬规则:只插目标段落末尾空行前,禁插标题与分隔线之间 |
+| -content 报错可操作性(S2-7 ux) | 报错末尾提示"编号 = 图片文件名后缀数字(如 test-image-03.png → 03)" |
+
+### 产物迁移记录（2026-08-01,`/home/xhm/文档/配图测试/`,非 git repo）
+
+- 备份:`/tmp/si-migrate-backup-images-1785573288`(迁移前 images/ 快照)
+- `images/test-img-01..04.png` → 顶层 `test-image-01..04.png`
+- 副本 `test-image.md` 4 处 `![](images/test-img-NN.png)` → `![]({stem}-image-NN.png)`(Edit 逐处改,已 grep 验证无残留)
+- `images/` 保留(内含 4 个 .mmd/.excalidraw 源文件)
+- 旧 `/tmp/si-plan-*.json` 与遗留 `test.json`(v1 规划)不再使用,由 v3 命令显式拒绝/忽略
