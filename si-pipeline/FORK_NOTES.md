@@ -221,7 +221,7 @@ commit `01b6809` 引入 manifest 概念，但本 fork 的早退分支**只重 ma
 | `_meta.source` | 规范化绝对路径(realpath) |
 | `_meta.source_mtime` / `source_size` | stat 文章记录,Step 0 陈旧检测(原文已修改 → 警告/提示) |
 | picture.status | 恢复 `"planned\|generated\|failed"`,每张图执行后更新(报告表格加 status 列) |
-| `source_file` | 相对文章目录路径(Step 0 强制 cd 后解析无歧义) |
+| `source_file` | 相对文章目录路径(Step 0 强制 cd 后解析无歧义);文件在 /tmp(如 prompt)→ 写绝对路径并注释说明 |
 | 版本兼容 | v1/v2 → 显式拒绝("请重跑完整流程升级为 v3"),删除 content 重建死代码 |
 
 ### v3 修复清单（对应审查发现）
@@ -243,7 +243,7 @@ commit `01b6809` 引入 manifest 概念，但本 fork 的早退分支**只重 ma
 | 副本覆盖矛盾(S3-4 logic) | Step 5 与失败表统一:副本已存在 → diff 摘要 → 询问覆盖 |
 | 命名三处漂移(S3-9 logic / S3-1 integration) | 统一 `{stem}-image-NN.png` 顶层;删除"100% 沿用"错误声明改为如实描述;现有产物已迁移 |
 | 无 flag 重跑漂移(S4-2 manifest / S1-3 ux) | 无 flag + manifest 存在 + 原文未变 → 摘要表 + 询问「复用」/「重新分析」;原文已变 → 直接重新分析(带提示) |
-| 编号/源文件对应不可知(S2-2 ux) | 报告表格加 `source_file` 列(相对文章目录),编号两位(01) |
+| 编号/源文件对应不可知(S2-2 ux) | 报告表格加 `source_file` 列(.mmd/.excalidraw 相对文章目录;gemini prompt 文件在 /tmp 写绝对路径并注释),编号两位(01) |
 | 副本内容被微改(S2-5 ux) | 硬规则:禁改原文任何文字(含标点);插图后 diff 校验只允许新增图片行+空行 |
 | 插图落在标题与 --- 之间(S2-6 ux) | 硬规则:只插目标段落末尾空行前,禁插标题与分隔线之间 |
 | -content 报错可操作性(S2-7 ux) | 报错末尾提示"编号 = 图片文件名后缀数字(如 test-image-03.png → 03)" |
@@ -255,3 +255,11 @@ commit `01b6809` 引入 manifest 概念，但本 fork 的早退分支**只重 ma
 - 副本 `test-image.md` 4 处 `![](images/test-img-NN.png)` → `![]({stem}-image-NN.png)`(Edit 逐处改,已 grep 验证无残留)
 - `images/` 保留(内含 4 个 .mmd/.excalidraw 源文件)
 - 旧 `/tmp/si-plan-*.json` 与遗留 `test.json`(v1 规划)不再使用,由 v3 命令显式拒绝/忽略
+
+### v3 端到端验证记录(2026-08-01)
+
+- **minimax 首次真实调用成功**:产物 1280×720,退出码 0(实测文件 `/home/xhm/文档/配图测试/test-minimax-image-01.png`)
+- **发现缺陷「PNG 扩展名 + JPEG 内容」**:minimax 产物 `minimax-0.jpeg` 实测是 **JPEG 编码(1280×720)**,`mv` 仅换扩展名不换编码 → 严格按扩展名解析的工具解码失败
+- **修复(格式统一,2026-08-01)**:slash command 新增「格式统一规范」,收敛为**单一规范文本**(Step 4a 末尾,路径 1/2 引用,避免三处重复维护):`file` 检测 → 已是真 PNG("PNG image data")跳过;JPEG → `ffmpeg -y -i <png> -update 1 <png>.fix.png && mv` 转码为真 PNG(先写临时文件再 mv 覆盖,同路径直写有截断风险;`-update 1` 抑制单帧输出提示);ffmpeg 缺失 → 警告"⚠️ 产物为 JPEG 编码但扩展名 .png,请安装 ffmpeg 以获得真 PNG;当前文件可正常显示"(不失败);转码后 `file` 验证。**仅 gemini/minimax 分支执行**;mermaid/excalidraw 输出本为真 PNG,不执行
+- **source_file 路径规则统一**:相对文章目录;文件在 /tmp(如 prompt 文件)→ 写绝对路径并注释说明(schema 注释 / v3 变更 / 报告表格规范三处同步)
+- 依赖新增:**ffmpeg(可选)**,JPEG→PNG 转码;缺失时产物保持 JPEG 编码并警告

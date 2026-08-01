@@ -76,6 +76,7 @@ manifest（`{stem}.si-plan.json`，**文章目录**，与 `{stem}-image.md` 平�
 - manifest 损坏（JSON 解析失败）→ "manifest 损坏({path}),请删除后重跑完整流程"。
 - 原文已修改（mtime/size 不符）→ 路径 1/2/3 警告"原文已修改({date}),图片可能过时;确认继续则手动回复继续"。
 - **无 flag + manifest 存在 + 原文未变** → 展示 manifest 摘要表（编号/引擎/源文件/status），询问**「复用」（推荐,幂等）还是「重新分析」**。原文已变 → 直接重新分析（带提示）。
+- **格式统一（仅 gemini/minimax）**：minimax 产物实测是 JPEG 编码(1280×720)，mv 后必须 `file` 检测 + ffmpeg 转码为真 PNG；ffmpeg 缺失 → 警告，产物保持 JPEG 编码。mermaid/excalidraw 输出本为真 PNG，无需处理。
 
 #### manifest v3 schema
 
@@ -134,7 +135,7 @@ Step 1 读原文
 Step 2 心跳分析(识别 3-5 个配图位置 + 选 engine)
 Step 3 (必做) 写 manifest 到文章目录 {stem}.si-plan.json (v3 schema,写后 jq -e 校验)
 Step 4 循环每张图:
-        gemini     → minimax_t2i.py        → {stem}-image-NN.png
+        gemini     → minimax_t2i.py + ffmpeg 转码 → {stem}-image-NN.png
         mermaid    → 作者 mermaid-export   → {stem}-image-NN.png
         excalidraw → 作者 excalidraw-export → {stem}-image-NN.png
 Step 5 复制原文为 {stem}-image.md,在心跳记的位置插 ![](...)(副本已存在 → diff 摘要 → 询问覆盖)
@@ -147,7 +148,7 @@ Step 6 报告产物
 
 | 维度 | 原版 `/smart-illustrator` | 本命令 |
 |---|---|---|
-| 创意图 | Gemini API | minimax_t2i.py(本地,调用契约实测:位置 prompt + `--out` 目录 + `--ratio 16:9`) |
+| 创意图 | Gemini API | minimax_t2i.py(本地,调用契约实测:位置 prompt + `--out` 目录 + `--ratio 16:9`);产物为 JPEG 编码,统一转码为真 PNG(ffmpeg,可选依赖) |
 | mermaid | `mermaid-export.ts` | ✅ 完全复用,不改 |
 | excalidraw | `excalidraw-export.ts` | ✅ 完全复用,不改 |
 | PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用(文章目录顶层,v3 起) |
@@ -165,6 +166,7 @@ Step 6 报告产物
 - Playwright + Firefox(Excalidraw 导出依赖)
 - minimax 脚本 + `MINIMAX_IMAGE_API_KEY`(或回落 `MINIMAX_API_KEY`)环境变量
 - jq(路径 1/2/3 的 manifest 读取依赖)
+- ffmpeg(可选,JPEG→PNG 转码:minimax 产物实测是 JPEG 编码,须转码为真 PNG;缺失时产物保持 JPEG 编码并警告)
 
 ## 非侵入承诺
 
