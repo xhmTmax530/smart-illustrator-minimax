@@ -26,5 +26,5 @@ Claude Code 从 `~/.claude/commands/` 加载用户级命令;仓库内版本用�
 
 | 文件 | 说明 |
 |---|---|
-| `smart-illustrator-minimax.md` | slash command 本体(v3,550 行,4 路径早退分支) |
+| `smart-illustrator-minimax.md` | slash command 本体(v3,574 行,4 路径早退分支) |
 | `.gitkeep` | 目录占位(作者原) |

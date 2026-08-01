@@ -263,3 +263,32 @@ commit `01b6809` 引入 manifest 概念，但本 fork 的早退分支**只重 ma
 - **修复(格式统一,2026-08-01)**:slash command 新增「格式统一规范」,收敛为**单一规范文本**(Step 4a 末尾,路径 1/2 引用,避免三处重复维护):`file` 检测 → 已是真 PNG("PNG image data")跳过;JPEG → `ffmpeg -y -i <png> -update 1 <png>.fix.png && mv` 转码为真 PNG(先写临时文件再 mv 覆盖,同路径直写有截断风险;`-update 1` 抑制单帧输出提示);ffmpeg 缺失 → 警告"⚠️ 产物为 JPEG 编码但扩展名 .png,请安装 ffmpeg 以获得真 PNG;当前文件可正常显示"(不失败);转码后 `file` 验证。**仅 gemini/minimax 分支执行**;mermaid/excalidraw 输出本为真 PNG,不执行
 - **source_file 路径规则统一**:相对文章目录;文件在 /tmp(如 prompt 文件)→ 写绝对路径并注释说明(schema 注释 / v3 变更 / 报告表格规范三处同步)
 - 依赖新增:**ffmpeg(可选)**,JPEG→PNG 转码;缺失时产物保持 JPEG 编码并警告
+
+---
+
+## Section 11: 作者输出结构查证 + v3 验证记录(2026-08-01)
+
+### 作者输出结构查证(2026-08-01,派研究 agent 核实作者原版设计)
+
+| 事实 | 出处 |
+|------|------|
+| 正文配图放**顶层** `{stem}-image-NN.png`(两位零填充从 01) | SKILL.md:304-311「输出文件」章节、README.md:133-142「Output Files」章节,双文档图示一致 |
+| 作者脚本**从不创建 images/ 子目录**:只有 `mkdir(dirname(output), {recursive:true})` 确保父目录存在 | generate-image.ts:641-642 / mermaid-export.ts:218-219 / excalidraw-export.ts:338 |
+| 唯一建目录的是 slides 批量模式(默认 `./illustrations`) | batch-generate.ts:307 |
+| `images/` 只出现在 README 的 slides 调用示例 `--output-dir ./images`(且与脚本默认 `./illustrations` 矛盾,纯示例文本) | README slides 示例 |
+| 封面图 `{文章名}-cover.png` 顶层;副本 `{文章名}-image.md` 同目录;.mmd/.excalidraw 源文件同目录保留 | SKILL.md:304-311「输出文件」章节 |
+
+**结论**:v3 的顶层命名 `{stem}-image-NN.png` 与作者完全一致;v2 的 `images/{stem}-img-NN.png` 才是偏离(v3 已迁回)。
+
+### T1 测试(2026-08-01):无 flag 重跑分流验证
+
+- 测试对象:test-minimax.md,无 flag 重跑 → **精确命中** Step 0.6「复用/重新分析」询问(路径 4 分流正确)
+- 复用分支验证通过:**零 token**(不读原文、不 LLM 重新分析,直接沿用 manifest 执行 skip-existing)
+- 测试发现的文档空白:**skip-existing 只校验文件存在性,不校验编码** —— 格式统一修复前生成的历史 JPEG 编码产物(扩展名 .png)会被静默跳过,文档无处理路径
+  - **处理建议**:历史 JPEG 产物用 `--regen N` 强制重生(走格式统一转码修复),或 `--force` 全量重生;可选优化方向是 skip 校验叠加 `file` 编码检测
+- 另:slash command 实际行数 **574**(commands/README.md 原写 550,已随本次同步修正)
+
+### 用户使用实录(2026-08-01 晚)
+
+- 用户手动跑 `--regen 1` 真实体验:**成功** —— 图片覆盖、副本零改动、格式统一修复端到端生效(产物变真 PNG 1.4MB)
+- 这是 `--regen` 路径的**首次真实用户端到端验证**(此前仅 fixture/逻辑确认 + minimax 单次真实调用)

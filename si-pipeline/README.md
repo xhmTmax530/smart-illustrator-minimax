@@ -77,6 +77,7 @@ manifest（`{stem}.si-plan.json`，**文章目录**，与 `{stem}-image.md` 平�
 - 原文已修改（mtime/size 不符）→ 路径 1/2/3 警告"原文已修改({date}),图片可能过时;确认继续则手动回复继续"。
 - **无 flag + manifest 存在 + 原文未变** → 展示 manifest 摘要表（编号/引擎/源文件/status），询问**「复用」（推荐,幂等）还是「重新分析」**。原文已变 → 直接重新分析（带提示）。
 - **格式统一（仅 gemini/minimax）**：minimax 产物实测是 JPEG 编码(1280×720)，mv 后必须 `file` 检测 + ffmpeg 转码为真 PNG；ffmpeg 缺失 → 警告，产物保持 JPEG 编码。mermaid/excalidraw 输出本为真 PNG，无需处理。
+- **已知限制（skip-existing 编码校验空白）**：skip 只校验文件存在性，**不校验编码** —— 格式统一修复前生成的历史 JPEG 编码产物（扩展名 .png）会被静默跳过。处理方式：用 `--regen N` / `--force` 强制重生（走格式统一转码修复）。
 
 #### manifest v3 schema
 
@@ -151,9 +152,15 @@ Step 6 报告产物
 | 创意图 | Gemini API | minimax_t2i.py(本地,调用契约实测:位置 prompt + `--out` 目录 + `--ratio 16:9`);产物为 JPEG 编码,统一转码为真 PNG(ffmpeg,可选依赖) |
 | mermaid | `mermaid-export.ts` | ✅ 完全复用,不改 |
 | excalidraw | `excalidraw-export.ts` | ✅ 完全复用,不改 |
-| PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用(文章目录顶层,v3 起) |
+| PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用(文章目录顶层,v3 起;2026-08-01 查证与作者 SKILL.md:304-311 / README.md:133-142 完全一致) |
 | 插入机制 | Claude 心跳 | ✅ 沿用(同一机制) |
 | 作者代码改动 | — | **0 行** |
+
+## 验证记录(2026-08-01)
+
+- **作者输出结构查证**：正文配图顶层 `{stem}-image-NN.png`（两位零填充从 01）与作者 SKILL.md:304-311 / README.md:133-142 一致；作者脚本从不创建 `images/` 子目录（仅 `mkdir(dirname(output))` 确保父目录存在，batch-generate.ts:307 的 `./illustrations` 除外）；`images/` 只出现在 README 的 slides 示例 `--output-dir ./images`（纯示例文本，且与脚本默认 `./illustrations` 矛盾）。v3 命名 = 作者风格，v2 的 `images/{stem}-img-NN.png` 才是偏离
+- **T1 无 flag 重跑测试**：精确命中「复用/重新分析」询问，复用分支零 token 验证通过
+- **用户真实体验（`--regen 1`）**：图片覆盖、副本零改动、格式统一转码端到端生效（产物变真 PNG 1.4MB）
 
 ## manifest(必做,双角色)
 
