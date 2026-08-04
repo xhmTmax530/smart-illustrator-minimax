@@ -46,3 +46,7 @@ bun-debug.log*
 dist/
 build/
 out/
+
+# Fork-local: Claude Code local config and memory (never commit)
+.claude/
+memory/

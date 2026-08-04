@@ -30,21 +30,21 @@ allowed-tools: Read Write Edit Bash Glob
 >
 > `--regen` 允许多次指定:`--regen 2 --regen 5` 只重生第 2 和第 5 张。`--regen` 必须带一个**正整数**参数(`--regen=3`、`--regen abc`、`--regen 2.5` 均为非法)。
 >
-> 文件名不变、路径不变 → 副本中的 `![]({stem}-image-NN.png)` 自动指向新图,无需改副本。
+> 重生机制:PNG 固定写入 `images/{stem}-image-NN.png`,副本引用一律 **base64 data URI 内嵌**(`![](data:image/png;base64,<...>)` 单行,自包含 —— 拷贝到任何地方打开都显示图片)。覆盖 PNG 后**必须**执行「副本引用刷新」(路径 1/2 内建):按图片行序号命中即整行替换为新 base64 行,缺失按 anchor 定位插入。
 
 ## 全局约束
 
-1. **原文永不动(硬规则)**:复制为 `{stem}-image.md`,所有写入副本。**禁止改动原文任何文字,包括引号、全角标点等细微字符**;插图后必须跑一次 `diff` 校验,只允许"新增图片行 + 空行"差异,任何对原文行的改动视为 bug 立即重试。
+1. **原文永不动(硬规则)**:复制为 `{stem}-image.md`,所有写入副本。**禁止改动原文任何文字,包括引号、全角标点等细微字符**;插图后必须跑一次 `diff` 校验。**副本唯一允许差异 = 图片行(base64)+ 空行**:base64 图片行一律以 `!` 开头,`grep -v '^!'` 过滤规则继续有效;过滤后 diff 中除空行外不得出现任何非空行差异;任何对原文行的改动视为 bug 立即重试。
 2. **Engine 枚举**(严格作者 `--engine` 值,不自定义): `gemini` | `excalidraw` | `mermaid`
-3. **PNG 命名(作者风格)**: `{stem}-image-{NN}.png`,**文章目录顶层**,NN 两位零填充从 01(如 `test-image-03.png`)。不与副本 `{stem}-image.md` 冲突(.md vs .png)。
+3. **PNG 命名(作者风格)**: `images/{stem}-image-{NN}.png`,**文章目录 images/ 子目录**(先 `mkdir -p images`),NN 两位零填充从 01(如 `images/test-image-03.png`)。不与副本 `{stem}-image.md` 冲突(.md vs .png)。
 4. **mermaid 默认 PNG**(走作者 `mermaid-export.ts`),不是代码块;excalidraw 永远 PNG(走 `excalidraw-export.ts`)。源文件命名保持 `{chart}.mmd` / `{chart}.excalidraw` 现状。
-5. **插入机制**:Claude 心跳记忆 — 同一个会话里读完文章 → 出图 → 写副本,"图 N 该放第 X 段"在 context window 里。**插图只插目标段落末尾空行之前;禁止插在标题与分隔线(`---`)之间**(图归属必须清晰)。
+5. **插入机制**:Claude 心跳记忆 — 同一个会话里读完文章 → 出图 → 写副本,"图 N 该放第 X 段"在 context window 里。**插图只插目标段落末尾空行之前;禁止插在标题与分隔线(`---`)之间**(图归属必须清晰)。**副本引用格式固定 base64 data URI 单行**:`![](data:image/png;base64,<base64>)` —— 单行、无尖括号包裹、无空格/换行,base64 以 `iVBOR` 开头(PNG 魔数)。生成命令:`python3 -c "import base64,sys;print(base64.b64encode(open(sys.argv[1],'rb').read()).decode())" <png>`。**base64 行可达 ~950KB,插图/刷新一律用 python3 脚本操作(禁用 Edit 工具)**:脚本定位 → 拼单行 → 写临时文件 → `os.replace` 原子替换。
 6. **复用作者脚本**(完全不改):
    - `scripts/mermaid-export.ts`(mmdc 出 PNG)
    - `scripts/excalidraw-export.ts`(Playwright + Firefox + excalidraw.com)
 7. **唯一新依赖**: `~/图片/minimax_t2i.py`(用户本地 minimax 出图脚本,仅替代 `generate-image.ts` 里的 Gemini API 调用)
 8. **manifest = 控制平面(必做)**:路径 4 必写 `{stem}.si-plan.json`(文章目录,与 `{stem}-image.md` 平级),路径 1/2/3 只读。schema `si-minimax/v3`。
-9. **早退分支**:manifest 存在 + flag 触发时,跳过 Read 全文 + cp 副本 + Edit 副本,只覆盖同名 PNG。
+9. **早退分支**:manifest 存在 + flag 触发时,跳过 Read 全文 + cp 副本,只覆盖同名 PNG + 执行「副本引用刷新」(仅动副本图片行,不重新分析)。
 
 ## 执行步骤
 
@@ -145,7 +145,7 @@ exit 1
 
 ### 路径 1:--regen N 早退
 
-> manifest 存在 + `--regen N` → 绝对不读原文、不动副本,只覆盖同名 PNG。
+> manifest 存在 + `--regen N` → 绝对不读原文(不重新分析),只覆盖同名 PNG;成功后执行「副本引用刷新」(见 1.2 末尾)。
 
 #### 1.1 输入校验(前置全量校验,任一非法 → 零执行)
 
@@ -191,7 +191,7 @@ PIC_JSON=$(jq -e --argjson id "$N" '.pictures[] | select(.id == $id)' "$MANIFEST
 
 2. 读取 `engine` / `topic` / `content` / `source_file` / `source_prompt`
 3. 未知 engine(不在 gemini/excalidraw/mermaid 枚举)→ 报错"picture $N engine 非法,已跳过",纳入失败列表,继续下一张
-4. 拼凑 PNG 路径:`${STEM}-image-$(printf '%02d' $N).png`(文章目录顶层)
+4. 拼凑 PNG 路径:`images/${STEM}-image-$(printf '%02d' $N).png`(文章目录 images/ 子目录;执行前 `mkdir -p images`)
 
 **gemini 分支(minimax 调用,契约已实测)**:
 
@@ -208,7 +208,7 @@ PIC_JSON=$(jq -e --argjson id "$N" '.pictures[] | select(.id == $id)' "$MANIFEST
 
 python3 ~/图片/minimax_t2i.py "$(cat /tmp/si-prompt-${NN}.txt)" \
   --out /tmp/si-out-${NN} --ratio 16:9 \
-  && mv /tmp/si-out-${NN}/minimax-0.jpeg "${STEM}-image-${NN}.png"
+  && mv /tmp/si-out-${NN}/minimax-0.jpeg "images/${STEM}-image-${NN}.png"
 # mv 后必须执行「格式统一规范」(Step 4a 末尾:file 检测 + ffmpeg 转码为真 PNG)
 ```
 
@@ -227,6 +227,34 @@ python3 ~/图片/minimax_t2i.py "$(cat /tmp/si-prompt-${NN}.txt)" \
 - `npx -y bun ~/.claude/skills/smart-illustrator/scripts/excalidraw-export.ts -i {source_file} -o {PNG_PATH} -s 2`
 - 成功:覆盖 PNG 并更新 status;失败:跳过,记录 failed
 
+**副本引用刷新(成功覆盖 PNG 后必做;只动副本图片行,不读原文分析;失败图不刷)**:
+
+对每张成功重生的图(在更新 status 之前):
+
+1. 副本 `{stem}-image.md` 不存在 → 跳过本步,报告"副本缺失,引用未刷新"
+2. **定位图片行(注意:base64 行不含文件名,原 `grep image-NN.png` 已失效)**:副本图片行按顺序对应 picture id —— manifest pictures 按 id 升序,副本插图顺序与之一致,第 N 张图 = 第 N 个图片行。先取序号:`Bash grep -n '^!\[\](data:image/png;base64,' "{stem}-image.md"` → 取第 N 个匹配行(行号记入报告)
+3. **命中** → 用 python3 脚本整行替换为新 PNG 的 base64 行(**禁用 Edit**,行可达 ~950KB;写临时文件再原子替换):
+
+```bash
+python3 - "{stem}-image.md" "images/{stem}-image-{NN}.png" $N << 'PYEOF'
+import base64, os, sys
+copy_path, png_path, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+b64 = base64.b64encode(open(png_path, "rb").read()).decode()
+img = "![](data:image/png;base64," + b64 + ")"
+lines = open(copy_path, encoding="utf-8").read().split("\n")
+hits = [i for i, l in enumerate(lines) if l.startswith("![](data:image/png;base64,")]
+if len(hits) < n:
+    print(f"[ERROR] 副本图片行不足:需第 {n} 个,实有 {len(hits)} 个", file=sys.stderr)
+    sys.exit(2)          # 退出码 2 → 走第 4 步 anchor 兜底
+lines[hits[n - 1]] = img
+open(copy_path + ".tmp", "w", encoding="utf-8").write("\n".join(lines))
+os.replace(copy_path + ".tmp", copy_path)
+print(f"刷新第 {n} 张图,行 {hits[n - 1] + 1}(base64 {len(b64)} 字符)")
+PYEOF
+```
+
+4. **未命中**(脚本退出码 2:引用被删/图片行不足/顺序错乱)→ 读 manifest 该 picture 的 `anchor`,`Read` 副本定位该段 → **段末空行前插入** base64 行(插入脚本同 Step 5.3;全流程唯一需要 LLM 心跳定位的步骤);段落定位失败 → 报告"引用未找到,未插入",不阻塞后续
+
 每张图执行后更新 manifest 中该 picture 的 status:
 
 ```bash
@@ -238,7 +266,7 @@ jq --argjson id "$N" --arg s "generated" \
 #### 1.3 完成报告(表格格式见 Step 6,status 列如实反映)
 
 ```
-路径 1 完成 — 副本未动
+路径 1 完成 — 副本引用已刷新(2 行整行替换;1 张副本缺失未刷)
 重生: 2, 5 (共 2 张);失败: 5 (minimax API 不可用);跳过: 1, 3, 4 (不在 regen 集合)
 ```
 
@@ -248,28 +276,42 @@ jq --argjson id "$N" --arg s "generated" \
 
 ### 路径 2:--force 早退
 
-> manifest 存在 + `--force` → 遍历所有 pictures,全量覆盖 PNG。**源文件缺失时直接报错跳过,不做从 content 重建**(旧版已显式拒绝,重建无意义)。
+> manifest 存在 + `--force` → 遍历所有 pictures,全量覆盖 PNG,每张成功后执行「副本引用刷新」(规范同路径 1.2)。**源文件缺失时直接报错跳过,不做从 content 重建**(旧版已显式拒绝,重建无意义)。
 
 #### 2.1 早退执行体
 
 ```
-Bash mkdir -p .   # 已在文章目录(cd 完成);无需再建目录
+Bash mkdir -p images   # 文章目录 images/ 子目录(PNG 收纳地)
 FORCE_MODE=true
 ```
 
 对每张 picture(按 id 遍历 `jq '.pictures[]'`):
 1. 读取 `engine` / `topic` / `content` / `source_file` / `source_prompt`
-2. 拼凑 PNG 路径:`${STEM}-image-$(printf '%02d' $N).png`
+2. 拼凑 PNG 路径:`images/${STEM}-image-$(printf '%02d' $N).png`
 3. engine 分支 —— **调用规范 + 格式统一与路径 1 完全相同**(gemini 走实测 minimax 契约;mermaid/excalidraw 走作者脚本):
    - gemini:HEREDOC 写 prompt 到 `/tmp/si-prompt-${NN}.txt`(≤1500 压缩策略同 Step 4a)→ `python3 ~/图片/minimax_t2i.py "$(cat ...)" --out /tmp/si-out-${NN} --ratio 16:9` → `mv /tmp/si-out-${NN}/minimax-0.jpeg {PNG}` → **格式统一规范(Step 4a 末尾):file 检测,JPEG 则 ffmpeg 转码为真 PNG**
    - mermaid:无 `source_file` → 跳过该图,报错;有 → `mermaid-export.ts -i {source_file} -o {PNG} -w 2400`
    - excalidraw:无 `source_file` → 跳过该图,报错;有 → `excalidraw-export.ts -i {source_file} -o {PNG} -s 2`
-4. 每张执行后更新 manifest 的 status(generated / failed)
+4. **成功覆盖 PNG 后 → 执行「副本引用刷新」(规范同路径 1.2,失败图不刷)**
+5. 每张执行后更新 manifest 的 status(generated / failed)
+6. **全部遍历完成后 → 孤儿文件检测(仅提示,不删除)**:遍历 `images/{stem}-image-*.png`,文件名序号不在 manifest pictures id 集合 → 提示"孤儿文件 {file}(manifest 未记录,未删除)"。脚本:
+
+```bash
+python3 - "$STEM" "$MANIFEST" << 'PYEOF'
+import glob, json, re, sys
+stem, manifest = sys.argv[1], sys.argv[2]
+ids = {str(p["id"]) for p in json.load(open(manifest))["pictures"]}
+for f in sorted(glob.glob(f"images/{stem}-image-*.png")):
+    m = re.search(r"image-(\d+)\.png$", f)
+    if m and m.group(1).lstrip("0") not in ids:
+        print(f"孤儿文件 {f}(manifest 未记录,未删除)")
+PYEOF
+```
 
 #### 2.2 完成报告
 
 ```
-路径 2 完成 — 副本未动
+路径 2 完成 — 副本引用已刷新(3 张整行替换;1 张副本缺失未刷)
 全量重生: 3 张;失败: 1 张 (excalidraw 源文件缺失)
 ```
 
@@ -304,7 +346,7 @@ FORCE_MODE=true
 - **并列 ≥ 2** → 报错,列出前 3 候选(id + topic + 命中维度 + 分值),要求 `--regen <id>` 消歧
 - **全 0 分** → 报错,列出所有 picture 的 id + topic + anchor
 
-> **提示(并列/零命中报错末尾必带)**:编号 = 图片文件名后缀数字(如 `test-image-03.png` → 03)。
+> **提示(并列/零命中报错末尾必带)**:编号 = 图片文件名后缀数字(如 `images/test-image-03.png` → 03)。
 
 ---
 
@@ -323,7 +365,7 @@ FORCE_MODE=true
 1. 识别 **3-5 个**配图位置(短文 1-2,中篇 2-4,长文 4-6,教程每主步骤 1 张)
 2. 为每张定 engine,优先级: `gemini`(隐喻/情感/封面) → `excalidraw`(手绘概念/对比/简单流程 ≤8 节点) → `mermaid`(复杂流程 >8 节点/多层架构/时序)
 3. 心跳里记好:**每张图对应文章哪段**(用简短描述,例如"图 2 在讲 Spring 三层架构那段后")
-4. 给每张定 PNG 序号(01, 02, ...)和 PNG 命名(`{stem}-image-{NN}.png`)
+4. 给每张定 PNG 序号(01, 02, ...)和 PNG 命名(`images/{stem}-image-{NN}.png`)
 
 > ⚠ 这步**没有任何写盘动作**。JSON 还没生成。
 >
@@ -359,7 +401,7 @@ Write {stem}.si-plan.json   # 文章目录,与 {stem}-image.md 平级
       "topic": "...",
       "content": "...",
       "anchor": "<简短段落描述,用于定位>",
-      "source_file": "<.mmd/.excalidraw 路径,相对文章目录,仅 mermaid/excalidraw;若文件在 /tmp 则写绝对路径并注释说明>",
+      "source_file": "<.mmd/.excalidraw 路径,相对文章目录、带 images/ 前缀(如 images/insight-5steps.mmd),仅 mermaid/excalidraw;若文件在 /tmp 则写绝对路径并注释说明>",
       "source_prompt": "<完整 prompt 文本,仅 gemini>",
       "status": "planned"
     }
@@ -370,12 +412,17 @@ Write {stem}.si-plan.json   # 文章目录,与 {stem}-image.md 平级
 **v3 变更(vs v2)**:
 - `_meta` 新增 `source`(规范化绝对路径)/ `source_mtime` / `source_size`(陈旧检测用)
 - 每张 picture 恢复 `"status": "planned|generated|failed"`,执行后即时更新
-- 生成图片时 `source_file` 写**相对文章目录**路径(Step 0 已 cd,解析无歧义);**文件在 /tmp(如 gemini 的 prompt 文件)时写绝对路径并注释说明**
-- 写盘后强制校验:
+- 生成图片时 `source_file` 写**相对文章目录**路径、带 `images/` 前缀(Step 0 已 cd,解析无歧义);**文件在 /tmp(如 gemini 的 prompt 文件)时写绝对路径并注释说明**
+- 写盘后强制校验(两级):先 `jq -e .` 基础 JSON 校验;若 `~/.claude/skills/si-regen/scripts/validate-manifest.sh` 存在(另一 agent 并行产出)则追加调用。校验失败 → 按校验输出修正后重写 manifest,重写后复验;仍失败 → 报错 exit 1。脚本不存在 → 仅 jq 兜底:
 
 ```bash
 jq -e . "{stem}.si-plan.json" >/dev/null || {
   echo "[ERROR] manifest 写入后校验失败,请重新生成"; exit 1; }
+VALIDATOR="$HOME/.claude/skills/si-regen/scripts/validate-manifest.sh"
+if [[ -f "$VALIDATOR" ]] && ! bash "$VALIDATOR" "{stem}.si-plan.json"; then
+  echo "[ERROR] validate-manifest.sh 校验失败,请按校验输出修正重写后复验"
+  exit 1
+fi
 ```
 
 #### Step 4:生成图片
@@ -383,8 +430,10 @@ jq -e . "{stem}.si-plan.json" >/dev/null || {
 skip-existing 逻辑(「重新分析」与「复用」共用;路径 4 内 flag 恒为空):
 
 ```
+Bash mkdir -p images   # 第一步:建图片收纳目录
+
 默认(无 flag):
-  若 {stem}-image-{NN}.png 已存在 → 跳过(⏭)
+  若 images/{stem}-image-{NN}.png 已存在 → 跳过(⏭)
   若不存在 → 正常生成
 ```
 
@@ -412,7 +461,7 @@ wc -c /tmp/si-prompt-{NN}.txt    # 校验 ≤1500,超限按上面规则截断
 python3 ~/图片/minimax_t2i.py "$(cat /tmp/si-prompt-{NN}.txt)" \
   --out /tmp/si-out-{NN} \
   --ratio 16:9
-mv /tmp/si-out-{NN}/minimax-0.jpeg "{stem}-image-{NN}.png"
+mv /tmp/si-out-{NN}/minimax-0.jpeg "images/{stem}-image-{NN}.png"
 ```
 
 - **绝对不能用 `--prompt-file` / `--output` 这两个不存在的 flag**(真实契约:位置参数 prompt + `--out <目录>` + 产物 `minimax-{i}.jpeg`)
@@ -425,7 +474,7 @@ mv /tmp/si-out-{NN}/minimax-0.jpeg "{stem}-image-{NN}.png"
 
 ```bash
 # 1. file 检测产物编码:已是真 PNG("PNG image data")→ 跳过;JPEG(或其他非 PNG)→ 转码
-PNG="{stem}-image-{NN}.png"
+PNG="images/{stem}-image-{NN}.png"
 if ! file "$PNG" | grep -q "PNG image data"; then
   if command -v ffmpeg >/dev/null 2>&1; then
     # 2. ffmpeg 按输出扩展名编码真 PNG;先写临时文件再 mv 覆盖(同路径直写有截断风险)
@@ -444,26 +493,26 @@ file "$PNG"    # 4. 验证:必须输出 "PNG image data"(转码后或原本就�
 
 **4b. mermaid(复用作者脚本)**:
 ```
-Write {chart}.mmd
+Write images/{chart}.mmd
 <mmd 内容,Claude 按 content 生成>
 Bash npx -y bun ~/.claude/skills/smart-illustrator/scripts/mermaid-export.ts \
-  -i {chart}.mmd \
-  -o {stem}-image-{NN}.png \
+  -i images/{chart}.mmd \
+  -o images/{stem}-image-{NN}.png \
   -w 2400
 ```
-- `.mmd` 源文件保留在文章目录(命名 `{chart}.mmd` 现状不变)
+- `.mmd` 源文件保留在文章目录 images/ 子目录(命名 `{chart}.mmd` 现状不变)
 
 **4c. excalidraw(复用作者脚本)**:
 ```
 Read ~/.claude/skills/smart-illustrator/references/excalidraw-guide.md
-Write {chart}.excalidraw
+Write images/{chart}.excalidraw
 <按 guide 规范写 Excalidraw JSON 数组>
 Bash npx -y bun ~/.claude/skills/smart-illustrator/scripts/excalidraw-export.ts \
-  -i {chart}.excalidraw \
-  -o {stem}-image-{NN}.png \
+  -i images/{chart}.excalidraw \
+  -o images/{stem}-image-{NN}.png \
   -s 2
 ```
-- `.excalidraw` 源文件保留
+- `.excalidraw` 源文件保留在 images/ 子目录
 - 必读 excalidraw-guide.md(`boundElements: null`、`updated: 1`、不加 `frameId`)
 - 依赖 Playwright + Firefox(若未装,报错)
 
@@ -482,18 +531,30 @@ fi
 
 2. 确认覆盖(或副本不存在)→ `Bash cp <file.md> {stem}-image.md`(先复制原文为副本)
 
-3. `Read {stem}-image.md`,在心跳记的"图 N 该放第 X 段"位置插图:
+3. `Read {stem}-image.md`,在心跳记的"图 N 该放第 X 段"位置插图。**插图操作用 python3 脚本执行(禁用 Edit)** —— base64 行可达 ~950KB,Edit 工具无法承载。脚本按 anchor 定位段末空行前,读取 PNG 生成 base64,拼成单行插入,写临时文件再原子替换:
+
+```bash
+python3 - "{stem}-image.md" "images/{stem}-image-{NN}.png" "<段末定位标记:该段最后一行内容的唯一子串>" << 'PYEOF'
+import base64, os, sys
+copy_path, png_path, marker = sys.argv[1], sys.argv[2], sys.argv[3]
+b64 = base64.b64encode(open(png_path, "rb").read()).decode()
+img = "![](data:image/png;base64," + b64 + ")"
+lines = open(copy_path, encoding="utf-8").read().split("\n")
+try:
+    idx = next(i for i, l in enumerate(lines) if marker in l)          # 段末定位标记行
+except StopIteration:
+    print(f"[ERROR] 段末定位标记未找到: {marker}", file=sys.stderr); sys.exit(3)
+j = next(i for i in range(idx + 1, len(lines)) if not lines[i].strip())  # 段末空行
+lines[j:j+1] = ["", img, ""]                                           # 空行位置插入:空行+图片行+空行
+open(copy_path + ".tmp", "w", encoding="utf-8").write("\n".join(lines))
+os.replace(copy_path + ".tmp", copy_path)
+print(f"插入图片行于行 {j + 1} 后(base64 {len(b64)} 字符)")
+PYEOF
 ```
-Edit {stem}-image.md
-old_string: <含目标段落的若干行>
-new_string: <同一段落,在末尾空行前插>
 
-![](<stem>-image-{NN}.png)
+对每张图重复一次(第 N 张图 = 第 N 个 picture,PNG 序号 `{NN}` 对应;`段末定位标记` = anchor 对应段落最后一行内容的唯一子串;标记未找到 → 报错不插入,人工核对 anchor)。**不动原文 paragraph 结构,不改任何原文字符(含标点)**,只在段末空行前插图;禁止插在标题与 `---` 分隔线之间。引用格式固定 base64 data URI 单行(见全局约束 5)。
 
-```
-对每张图重复一次。**不动原文 paragraph 结构,不改任何原文字符(含标点)**,只在段末空行前插图;禁止插在标题与 `---` 分隔线之间。
-
-4. **插图后 diff 校验**(硬规则):`diff <(grep -v '^!') ...` 只允许"新增图片行 + 空行"差异,发现原文行被改动(如引号被换)→ 视为 bug,重新从 Step 5.2 开始。
+4. **插图后 diff 校验**(硬规则):`diff <(grep -v '^!') "$ARTICLE" <(grep -v '^!') "{stem}-image.md"`。**副本唯一允许差异 = 图片行(base64)+ 空行**:base64 图片行以 `!` 开头,`grep -v '^!'` 过滤规则继续有效;过滤后 diff 输出中除空行外不得出现任何非空行差异;发现原文行被改动(如引号被换)→ 视为 bug,重新从 Step 5.2 开始。
 
 #### Step 6:报告
 
@@ -502,20 +563,20 @@ new_string: <同一段落,在末尾空行前插>
 ────────────────────────────────────────────────────────────────────────────
 编号 │ 引擎       │ 源文件                              │ status     │ 动作 │ PNG 路径
 ─────┼────────────┼────────────────────────────────────┼────────────┼──────┼────────────────────
-01   │ mermaid    │ images/test-chart-aop.mmd           │ generated  │ 🆕  │ test-image-01.png
-02   │ excalidraw │ images/test-chart-comparison.excalidraw │ generated │ 🆕 │ test-image-02.png
-03   │ gemini     │ /tmp/si-prompt-03.txt               │ failed     │ ✖   │ test-image-03.png
-04   │ mermaid    │ images/test-chart-routing.mmd       │ generated  │ ⏭   │ test-image-04.png
+01   │ mermaid    │ images/test-chart-aop.mmd           │ generated  │ 🆕  │ images/test-image-01.png
+02   │ excalidraw │ images/test-chart-comparison.excalidraw │ generated │ 🆕 │ images/test-image-02.png
+03   │ gemini     │ /tmp/si-prompt-03.txt               │ failed     │ ✖   │ images/test-image-03.png
+04   │ mermaid    │ images/test-chart-routing.mmd       │ generated  │ ⏭   │ images/test-image-04.png
 
 动作图例: 🆕 生成(新图) │ 🔄 重生(--regen/--force 覆盖) │ ⏭ 跳过(已有文件) │ ⏭ 跳过(不在重生集合,仅 --regen) │ ✖ 失败
 
-✅ 副本:{stem}-image.md
-✅ 图片:{stem}-image-01.png ...(文章目录顶层)
+✅ 副本:{stem}-image.md(图片已 base64 内嵌,自包含 —— 拷贝到任何位置打开都显示图片;不引用外部 PNG)
+✅ 图片:images/{stem}-image-01.png ...(重生资产,PNG 仍保留在文章目录 images/ 子目录,副本不再引用)
 ✅ 源文件:images/*.mmd / *.excalidraw(保留可编辑)
 ✅ manifest:{stem}.si-plan.json(文章目录,v3)
 ```
 
-报告表格规范:编号**两位零填充**(01 不是 001);`source_file` 列 = 该图的 .mmd/.excalidraw 源文件路径(**相对文章目录**)或 gemini 的 prompt 文件路径(prompt 在 /tmp,**写绝对路径**并注释说明);PNG 路径以文章目录为基准的相对路径;status 列如实反映 planned/generated/failed。
+报告表格规范:编号**两位零填充**(01 不是 001);`source_file` 列 = 该图的 .mmd/.excalidraw 源文件路径(**相对文章目录、带 images/ 前缀**)或 gemini 的 prompt 文件路径(prompt 在 /tmp,**写绝对路径**并注释说明);PNG 路径列写 `images/{stem}-image-NN.png`(文章目录 images/ 子目录相对路径);status 列如实反映 planned/generated/failed。
 
 ## 失败处理
 
@@ -538,6 +599,9 @@ new_string: <同一段落,在末尾空行前插>
 | excalidraw 脚本失败 / Playwright 未装 | 同上,提示安装 |
 | excalidraw JSON 不符规范 | 重新 `Read references/excalidraw-guide.md`,重写一次再导出;仍失败则跳过记录 |
 | 副本已存在 | 显示 diff 摘要,询问用户是否覆盖(回复「覆盖」或「跳过」) |
+| 副本 {stem}-image.md 不存在(--regen/--force 刷新时) | 跳过引用刷新,报告"副本缺失,引用未刷新" |
+| 副本中找不到图片引用/图片行不足(--regen/--force) | 读 manifest 该 picture 的 anchor 定位段落,段末空行前插入 base64 行(脚本,同 Step 5.3);段落也定位失败 → 报告"引用未找到,未插入",继续 |
+| 副本图片引用格式不符(旧绝对路径/相对引用/URL 编码) | 整行替换为 base64 data URI 标准格式(脚本,非 Edit),行号记入报告 |
 | `-content` 与 `--force` 同传 | 报错"-content and --force are mutually exclusive. Use one or the other." |
 | `-content` 智能匹配并列 ≥ 2 | 报错列前 3 候选(id + topic + 命中维度 + 分值);不重生任何图;提示"编号 = 图片文件名后缀数字" |
 | `-content` 智能匹配 0 分 | 报错列所有 picture 的 id + topic + anchor;提示"编号 = 图片文件名后缀数字" |
@@ -546,13 +610,14 @@ new_string: <同一段落,在末尾空行前插>
 ## 输出文件清单
 
 ```
-{stem}-image.md                       # 副本(带 ![]() 引用,原文不动)
-{stem}-image-01.png                   # PNG(文章目录顶层,作者风格命名)
-{stem}-image-02.png
-└── ...
-{chart}.mmd                           # mermaid 源文件(便于后续编辑,命名现状不变)
-{chart}.excalidraw                    # excalidraw 源文件
+{stem}-image.md                       # 副本(图片 base64 data URI 内嵌,单文件自包含;原文不动)
 {stem}.si-plan.json                   # manifest(v3,文章目录,与副本平级)
+images/
+├── {stem}-image-01.png               # PNG(文章目录 images/ 子目录,作者风格命名)
+├── {stem}-image-02.png
+│   └── ...
+├── {chart}.mmd                       # mermaid 源文件(便于后续编辑,命名现状不变)
+└── {chart}.excalidraw                # excalidraw 源文件
 ```
 
 ## 非侵入(钉死)
@@ -562,13 +627,13 @@ new_string: <同一段落,在末尾空行前插>
 - ❌ 不改 `styles/*.md`
 - ❌ 不改 `references/*.md`
 - ❌ 不改 `{stem}.md`(原文)
-- ✅ 只写:`{stem}-image.md`、`{stem}-image-NN.png`、`{chart}.mmd/.excalidraw`、`{stem}.si-plan.json`(文章目录)
+- ✅ 只写:`{stem}-image.md`、`images/{stem}-image-NN.png`、`images/{chart}.mmd/.excalidraw`、`{stem}.si-plan.json`(均在文章目录内)
 
 ## 与原版的关系
 
 - 100% 复用作者 `mermaid-export.ts` / `excalidraw-export.ts`(零改)
 - 100% 复用作者的引擎优先级规则
-- PNG 命名与作者一致:`{stem}-image-NN.png` 文章目录顶层(原版 SKILL.md 输出文件节同款)
+- PNG 命名与作者一致:`{stem}-image-NN.png`(差异:收纳进文章目录 `images/` 子目录,原版在顶层;副本图片用 base64 data URI 内嵌实现自包含,拷到任何地方都显示;重生后按图片行序号整行刷新 base64)
 - 唯一差异:Gemini API → minimax API(因为没订阅 Gemini;调用契约按实测记录)
-- 路径 1/2/3 早退分支复用 `skip-existing` 逻辑,但完全跳过 Read/cp/Edit 副本
+- 路径 1/2/3 早退分支复用 `skip-existing` 逻辑,跳过 Read 全文/cp 副本,但每张覆盖成功后执行「副本引用刷新」(只动副本图片行,不重新分析)
 - manifest v3:位置迁至文章目录、恢复 status、新增 source_mtime/source_size 陈旧检测

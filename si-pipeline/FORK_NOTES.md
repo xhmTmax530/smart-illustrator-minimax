@@ -12,8 +12,9 @@
 | mermaid 导出 | `scripts/mermaid-export.ts` | ✅ 完全复用，零改 |
 | excalidraw 导出 | `scripts/excalidraw-export.ts` | ✅ 完全复用，零改 |
 | 文章插图位置 | Claude 心跳记忆，无外部状态机 | ✅ 沿用同一机制 |
-| PNG 命名 | `{stem}-image-NN.png` | ✅ 沿用（v3 起迁回作者风格：文章目录顶层） |
-| 状态机 | 作者用心跳 = 状态机 | ✅ 沿用 (manifest 保留为早退分支控制平面，v3 起迁至文章目录，见 Section 10) |
+| PNG 命名 | `{stem}-image-NN.png` | `images/{stem}-image-{NN}.png`（文章目录 **images/ 子目录**，NN 两位零填充从 01；v3.2 起，见 Section 12） |
+| 副本插图 | 相对路径 `![]({stem}-image-NN.png)` | **base64 data URI 内嵌单行** `![](data:image/png;base64,<...>)`——自包含，复制到任何地方打开都显示图片（v3.2 起） |
+| 状态机 | 作者用心跳 = 状态机 | ✅ 沿用 (manifest 保留为早退分支控制平面，v3 起迁至文章目录，见 Section 10；schema 有独立样本与校验脚本，见 Section 12) |
 | 单图重生 | `--regenerate <ids>` (slides 模式，作者 `batch-generate.ts` 行 341) | ✅ 文章模式新增 `--regen N` (等价 skip-existing 逻辑) |
 | 强制重来 | `--force` (slides 模式) | ✅ 文章模式新增 `--force` |
 | 配置文件 | `config.json` (项目/用户两级) | ✅ 完全沿用 |
@@ -29,7 +30,7 @@
   if file_exists and not force and id not in regen_ids:
       skip
   ```
-- **关键洞察**: 文件名不变 → 副本 `![]({stem}-image-NN.png)` 自动指向新图，**零额外操作**
+- **关键洞察(v3.2 起)**: 副本插图是 **base64 data URI 内嵌单行**（自包含，拷贝到任何地方都显示图），文件路径不变不再自动生效 —— 重生覆盖 PNG 后**必须**执行「副本引用刷新」：按图片行序号定位（base64 行不含文件名，原 `grep image-NN.png` 失效；副本图片行按 manifest pictures id 升序对应），**整行替换**为新 base64 行（base64 行可达 ~950KB，一律用 python3 脚本定位→拼行→`os.replace` 原子替换，禁用 Edit 工具）；引用缺失按 anchor 定位插入；副本不存在则跳过并报告
 - 默认行为: 已有 PNG → 跳过 (避免 API 重复扣费)
 - 来源: 来自 commit `01b6809` 的 deepseek 偏差补丁设计参考 + 作者 `batch-generate.ts` 的 skip-existing 模式
 
@@ -73,17 +74,21 @@
    ```bash
    git clone https://github.com/xhmTmax530/smart-illustrator-minimax.git ~/.claude/skills/smart-illustrator
    ```
-2. 安装 slash command (文件不在 repo 里):
+2. 安装 slash command (文件**在 repo 里**,仓库是事实源):
    ```bash
-   # 从本会话或手动复制 ~/.claude/commands/smart-illustrator-minimax.md
+   cp si-pipeline/commands/smart-illustrator-minimax.md ~/.claude/commands/
    ```
-3. 装依赖:
+3. 安装 si-regen skill (仓库内是事实源,含 schema 样本与校验脚本):
+   ```bash
+   cp -r si-pipeline/skills/si-regen ~/.claude/skills/   # 全局 skill:SKILL.md + schema/ + scripts/validate-manifest.sh
+   ```
+4. 装依赖:
    ```bash
    npm i -g @mermaid-js/mermaid-cli
    cd ~/.claude/skills/smart-illustrator/scripts && npm install && npx playwright install firefox
    export MINIMAX_API_KEY=<你的 key>
    ```
-4. 使用:
+6. 使用:
    ```bash
    /smart-illustrator-minimax "<article.md>" [extra hints]
    /smart-illustrator-minimax "<article.md>" --regen 3
@@ -95,7 +100,7 @@
 ## Section 6: 版本与同步策略
 
 - 上游版本: 跟随 axtonliu/smart-illustrator 的 `main` 分支
-- 本 fork: 独立 `feat/placeholder-pipeline` 分支
+- 本 fork: 改造主线在 **`main`**(默认分支,推送目标);`feat/placeholder-pipeline` 为开发期分支(历史,已并入 main)
 - 不主动 push PR 回上游 (非侵入增强，要保留作者的 `--engine` 设计空间)
 
 ---
@@ -292,3 +297,16 @@ commit `01b6809` 引入 manifest 概念，但本 fork 的早退分支**只重 ma
 
 - 用户手动跑 `--regen 1` 真实体验:**成功** —— 图片覆盖、副本零改动、格式统一修复端到端生效(产物变真 PNG 1.4MB)
 - 这是 `--regen` 路径的**首次真实用户端到端验证**(此前仅 fixture/逻辑确认 + minimax 单次真实调用)
+
+---
+
+## Section 12: v3.2 变更(2026-08-04)
+
+| 变更 | 内容 |
+|------|------|
+| PNG 收纳 | `images/{stem}-image-{NN}.png`,文章目录 **images/ 子目录**(先 `mkdir -p images`) |
+| 副本插图 | **base64 data URI 内嵌单行** `![](data:image/png;base64,<...>)`(无尖括号包裹、无空格/换行,base64 以 `iVBOR` 开头;单行可达 ~950KB) |
+| 自包含性 | 副本拷贝到任何地方打开都显示图片,不再依赖文章目录的 PNG 文件 |
+| 副本引用刷新 | 覆盖 PNG 后**必须**刷新:按图片行序号定位(base64 行不含文件名,`grep image-NN.png` 失效;图片行按 manifest pictures id 升序对应)→ 整行替换为新 base64 行(引用缺失按 anchor 定位插入);**base64 行一律 python3 脚本操作(定位→拼单行→临时文件→`os.replace` 原子替换),禁用 Edit 工具** |
+| manifest schema 固化 | 独立样本 `si-pipeline/skills/si-regen/schema/si-plan-v3.sample.json` + 校验脚本 `scripts/validate-manifest.sh`(bash,jq;校验 schema 版本/字段/状态机/序号连续性) |
+| 仓库资产 | 命令事实源 `si-pipeline/commands/smart-illustrator-minimax.md`(v3.2,639 行)、skill 事实源 `si-pipeline/skills/si-regen/`(SKILL.md + schema/ + scripts/),安装方式见 Section 5 |
