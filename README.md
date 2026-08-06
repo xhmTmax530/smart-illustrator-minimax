@@ -22,18 +22,24 @@
 | Claude Code | 运行命令 | 官方安装 |
 | bun 或 node | 渲染 mermaid / excalidraw 图 | `curl -fsSL https://bun.sh/install \| bash` |
 | ffmpeg | 图片格式统一、生成缩略图 | `sudo apt install ffmpeg`（macOS: `brew install ffmpeg`） |
-| Minimax API Key | AI 生成封面图 | 环境变量 `MINIMAX_IMAGE_API_KEY` |
+| Gemini API Key | 作者原版盒子（`/smart-illustrator`）生图 | 环境变量 `GEMINI_API_KEY` |
+| Minimax API Key | minimax 盒子（`/smart-illustrator-minimax`）生成封面图 | 环境变量 `MINIMAX_IMAGE_API_KEY` |
 
-## 怎么安装
+## 怎么安装（盒子方式，与作者原版同款）
 
-1. 把本仓库的 `minimax-command/smart-illustrator-minimax.md` 复制到 `~/.claude/commands/`
-2. 把 `si-regen/` 目录复制到 `~/.claude/skills/`（校验脚本用）
-3. 把 `scripts/minimax_t2i.py` 放到任意位置（如 `~/图片/`），并在步骤 1 的命令文件里确认脚本路径
-4. 设置环境变量（写到 `~/.bashrc` 或 `~/.zshrc`）：
+1. **Clone 本仓库**（fork 到自己的 GitHub 后 clone，或直接 clone）
+2. **把三个盒子放进抽屉**（`~/.claude/skills/` 下的每个目录就是一个「盒子」，放进去即被 Claude Code 识别为 `/盒子名`）：
+   - **作者原版盒子**：把仓库内容放到 `~/.claude/skills/smart-illustrator/` → 得到 `/smart-illustrator`
+   - **minimax 盒子**：把 `si-minimax/` 目录放到 `~/.claude/skills/si-minimax/` → 得到 `/smart-illustrator-minimax`
+   - **校验盒子**：把 `si-regen/` 目录放到 `~/.claude/skills/si-regen/`（manifest 校验脚本用）
+3. **设置两个环境变量**（写到 `~/.bashrc` 或 `~/.zshrc`）：
    ```bash
-   export MINIMAX_IMAGE_API_KEY="你的-minimax-api-key"
+   export GEMINI_API_KEY="你的-gemini-api-key"          # 作者原版盒子用（/smart-illustrator）
+   export MINIMAX_IMAGE_API_KEY="你的-minimax-api-key"  # minimax 盒子用（/smart-illustrator-minimax）
    ```
-5. 重启 Claude Code，完成。
+4. **重启 Claude Code**，完成。
+
+> minimax 盒子的出图脚本 `minimax_t2i.py` 已随仓库 `scripts/` 分发，无需额外放置。
 
 ## 怎么用
 
@@ -84,4 +90,8 @@ A: 不会。所有改动都发生在 `{文章}_images/` 目录里，原文件一
 
 ## 与作者原版的关系
 
-本项目是 [axtonliu/smart-illustrator](https://github.com/axtonliu/smart-illustrator) 的 **minimax 替代版**：作者原版用 Gemini 生封面，本版改用 Minimax（国内可用），并加入了 manifest 规划机制、封面双重表示（frontmatter + base64 内嵌）等增强。作者原版说明见 [README.en.md](README.en.md) 和 [README.zh-CN.md](README.zh-CN.md)。
+本仓库是 [axtonliu/smart-illustrator](https://github.com/axtonliu/smart-illustrator) 的 fork，**不侵入作者任何文件**（SKILL.md / scripts / styles / references / prompts / docs / assets 一律未改），只新增一个 minimax 盒子（`si-minimax/`，识别为 `/smart-illustrator-minimax`），与作者原版盒子（`/smart-illustrator`）**并排共存**——装好即两个命令同时在。
+
+安装体验与作者原版**完全一致**：clone 仓库 → 把盒子放进 `~/.claude/skills/` → 重启即用，无任何额外配置步骤。
+
+作者原版用 Gemini 生封面，本版改用 Minimax（国内可用），并加入了 manifest 规划机制、封面双重表示（frontmatter + base64 内嵌）等增强。作者原版说明见 [README.en.md](README.en.md) 和 [README.zh-CN.md](README.zh-CN.md)。
